@@ -1,11 +1,12 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Building2, 
   Mail, 
   MessageCircle, 
   Flame,
   ArrowUpRight,
-  MoreHorizontal
+  MoreHorizontal,
+  Loader2
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -19,10 +20,31 @@ import {
   Pie,
   Cell
 } from 'recharts';
-import { getStats, MOCK_LOGS } from '../services/mockService';
+import { api } from '../services/api';
+import { DashboardStats, ActionLog } from '../types';
 
 const Dashboard: React.FC = () => {
-  const stats = getStats();
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [logs, setLogs] = useState<ActionLog[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+        try {
+            const [statsData, logsData] = await Promise.all([
+                api.dashboard.getStats(),
+                api.dashboard.getLogs()
+            ]);
+            setStats(statsData);
+            setLogs(logsData);
+        } catch (e) {
+            console.error("Dashboard data load error", e);
+        } finally {
+            setLoading(false);
+        }
+    };
+    fetchDashboardData();
+  }, []);
 
   const sectorData = [
     { name: 'Sağlık', value: 35 },
@@ -42,8 +64,18 @@ const Dashboard: React.FC = () => {
 
   const COLORS = ['#6366f1', '#ec4899', '#8b5cf6', '#14b8a6', '#94a3b8'];
 
+  if (loading) {
+      return (
+          <div className="flex items-center justify-center h-full min-h-[500px]">
+              <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+          </div>
+      );
+  }
+
+  if (!stats) return null;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-in">
       {/* Top Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
@@ -183,7 +215,7 @@ const Dashboard: React.FC = () => {
           </button>
         </div>
         <div className="divide-y divide-slate-100">
-          {MOCK_LOGS.map((log) => (
+          {logs.map((log) => (
             <div key={log.id} className="p-4 flex items-start gap-4 hover:bg-slate-50 transition-colors">
               <span className="text-xs font-mono text-slate-400 mt-1">{log.timestamp}</span>
               <div className="flex-1">

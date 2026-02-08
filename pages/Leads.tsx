@@ -1,15 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Search, Filter, Plus, FileSpreadsheet, MoreVertical, Mail, Phone, Edit, 
-  X, MessageCircle, ArrowRight, Clock, CheckCheck, Eye, Save
+  X, MessageCircle, ArrowRight, Clock, CheckCheck, Eye, Save, Loader2
 } from 'lucide-react';
-import { MOCK_LEADS, MOCK_INTERACTIONS } from '../services/mockService';
+import { MOCK_INTERACTIONS } from '../services/mockService'; // Still using interaction history mock, but could be moved to API too
+import { api } from '../services/api';
 import { STATUS_COLORS, SECTORS, DISTRICTS } from '../constants';
 import { Lead } from '../types';
 
 const Leads: React.FC = () => {
   // State for data manipulation
-  const [leads, setLeads] = useState<Lead[]>(MOCK_LEADS);
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [filterText, setFilterText] = useState('');
   const [selectedSector, setSelectedSector] = useState('');
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
@@ -19,10 +21,27 @@ const Leads: React.FC = () => {
   const [newLeadData, setNewLeadData] = useState<Partial<Lead>>({
     firma_adi: '', sektor: 'Diğer', ilce: 'Kadıköy', lead_durumu: 'aktif', lead_skoru: 1
   });
+  const [isSaving, setIsSaving] = useState(false);
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 7; 
+
+  // Load Data on Mount
+  useEffect(() => {
+    const loadLeads = async () => {
+        setIsLoading(true);
+        try {
+            const data = await api.leads.getAll();
+            setLeads(data);
+        } catch (error) {
+            console.error("Failed to fetch leads", error);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+    loadLeads();
+  }, []);
 
   // --- Actions ---
 
@@ -43,8 +62,9 @@ const Leads: React.FC = () => {
     link.click();
   };
 
-  const handleAddLead = () => {
+  const handleAddLead = async () => {
     if (!newLeadData.firma_adi) return;
+    setIsSaving(true);
     
     const newLead: Lead = {
       id: Math.random().toString(36).substr(2, 9),
@@ -62,9 +82,26 @@ const Leads: React.FC = () => {
       son_kontakt_tarihi: new Date().toISOString().slice(0,10)
     };
 
-    setLeads([newLead, ...leads]);
-    setIsAddModalOpen(false);
-    setNewLeadData({ firma_adi: '', sektor: 'Diğer', ilce: 'Kadıköy', lead_durumu: 'aktif', lead_skoru: 1 });
+    try {
+        await api.leads.create(newLead);
+        setLeads([newLead, ...leads]);
+        setIsAddModalOpen(false);
+        setNewLeadData({ firma_adi: '', sektor: 'Diğer', ilce: 'Kadıköy', lead_durumu: 'aktif', lead_skoru: 1 });
+    } finally {
+        setIsSaving(false);
+    }
+  };
+
+  const handleInteractionClick = async (type: 'email' | 'whatsapp', lead: Lead) => {
+      // Log the interaction first
+      await api.leads.logInteraction(lead.id, type);
+      
+      // Then redirect
+      if (type === 'email' && lead.email) {
+          window.location.href = `mailto:${lead.email}`;
+      } else if (type === 'whatsapp' && lead.telefon) {
+          window.open(`https://wa.me/${lead.telefon.replace(/\D/g,'')}`, '_blank');
+      }
   };
 
   // --- Filtering & Pagination ---
@@ -139,7 +176,12 @@ const Leads: React.FC = () => {
       </div>
 
       {/* Table */}
-      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden min-h-[400px] relative">
+        {isLoading && (
+            <div className="absolute inset-0 bg-white/80 z-10 flex items-center justify-center">
+                <Loader2 size={32} className="animate-spin text-indigo-600" />
+            </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
@@ -225,7 +267,7 @@ const Leads: React.FC = () => {
               ))}
             </tbody>
           </table>
-          {filteredLeads.length === 0 && (
+          {!isLoading && filteredLeads.length === 0 && (
             <div className="p-8 text-center text-slate-500">
               Kayıt bulunamadı.
             </div>
@@ -372,12 +414,18 @@ const Leads: React.FC = () => {
 
               {/* Quick Actions Footer inside Panel */}
               <div className="pt-4 mt-auto border-t border-slate-100 grid grid-cols-2 gap-3">
-                  <a href={selectedLead.email ? `mailto:${selectedLead.email}` : '#'} className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-lg text-sm font-medium transition-colors">
+                  <button 
+                    onClick={() => handleInteractionClick('email', selectedLead)}
+                    className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-lg text-sm font-medium transition-colors"
+                  >
                      <Mail size={16} /> E-posta Yaz
-                  </a>
-                  <a href={selectedLead.telefon ? `https://wa.me/${selectedLead.telefon.replace(/\D/g,'')}` : '#'} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-lg text-sm font-medium transition-colors">
+                  </button>
+                  <button 
+                    onClick={() => handleInteractionClick('whatsapp', selectedLead)}
+                    className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-lg text-sm font-medium transition-colors"
+                  >
                      <MessageCircle size={16} /> WhatsApp
-                  </a>
+                  </button>
               </div>
 
             </div>
@@ -446,8 +494,9 @@ const Leads: React.FC = () => {
                 </div>
                 <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-3">
                     <button onClick={() => setIsAddModalOpen(false)} className="px-4 py-2 text-slate-700 font-medium hover:bg-slate-200 rounded-lg transition-colors">İptal</button>
-                    <button onClick={handleAddLead} className="px-4 py-2 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2">
-                        <Save size={18} /> Kaydet
+                    <button onClick={handleAddLead} disabled={isSaving} className="px-4 py-2 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 disabled:opacity-70">
+                        {isSaving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />} 
+                        {isSaving ? 'Kaydediliyor...' : 'Kaydet'}
                     </button>
                 </div>
             </div>
