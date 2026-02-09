@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+
+import React, { useEffect, useState, useRef } from 'react';
 import { 
   Building2, 
   Mail, 
@@ -6,7 +7,21 @@ import {
   Flame,
   ArrowUpRight,
   MoreHorizontal,
-  Loader2
+  Loader2,
+  Send,
+  Headphones,
+  Volume2,
+  DollarSign,
+  BrainCircuit,
+  Lightbulb,
+  TrendingUp,
+  RefreshCw,
+  LayoutDashboard,
+  MapPin,
+  Terminal,
+  Activity,
+  PauseCircle,
+  PlayCircle
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -15,28 +30,53 @@ import {
   YAxis, 
   CartesianGrid, 
   Tooltip, 
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell
+  ResponsiveContainer, 
 } from 'recharts';
 import { api } from '../services/api';
-import { DashboardStats, ActionLog } from '../types';
+import { DashboardStats, ActionLog, Lead } from '../types';
+import EmptyState from '../components/EmptyState';
+import { useAgent } from '../context/AgentContext';
 
 const Dashboard: React.FC = () => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [logs, setLogs] = useState<ActionLog[]>([]);
+  const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sendingReport, setSendingReport] = useState(false);
+  const [chartData, setChartData] = useState<any[]>([]);
+  
+  // Connect to Agent Context for Live Thoughts
+  const { thoughts, isAgentRunning, toggleAgent } = useAgent();
+  const thoughtsEndRef = useRef<HTMLDivElement>(null);
+  
+  // Audio Briefing State
+  const [briefingStatus, setBriefingStatus] = useState<'idle' | 'loading' | 'playing'>('idle');
+
+  // Strategy Insights State
+  const [insights, setInsights] = useState<any[]>([]);
+  const [loadingInsights, setLoadingInsights] = useState(false);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
         try {
-            const [statsData, logsData] = await Promise.all([
+            const [statsData, leadsData, reportData] = await Promise.all([
                 api.dashboard.getStats(),
-                api.dashboard.getLogs()
+                api.leads.getAll(),
+                api.reports.getPerformanceData()
             ]);
             setStats(statsData);
-            setLogs(logsData);
+            setLeads(leadsData);
+            
+            // Map report weekly trend to chart format
+            const mappedChartData = reportData.weeklyTrend.map((item: any) => ({
+                name: item.name,
+                sent: item.sent,
+                response: item.response
+            }));
+            setChartData(mappedChartData);
+            
+            if (leadsData.length > 5) {
+                loadInsights();
+            }
         } catch (e) {
             console.error("Dashboard data load error", e);
         } finally {
@@ -46,23 +86,67 @@ const Dashboard: React.FC = () => {
     fetchDashboardData();
   }, []);
 
-  const sectorData = [
-    { name: 'Sağlık', value: 35 },
-    { name: 'Restoran', value: 25 },
-    { name: 'Emlak', value: 20 },
-    { name: 'Güzellik', value: 15 },
-    { name: 'Diğer', value: 5 },
-  ];
+  // Auto-scroll terminal
+  useEffect(() => {
+      if (thoughtsEndRef.current) {
+          thoughtsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      }
+  }, [thoughts]);
 
-  const dailyData = [
-    { name: 'Pzt', lead: 40, mail: 35 },
-    { name: 'Sal', lead: 30, mail: 25 },
-    { name: 'Çar', lead: 50, mail: 45 },
-    { name: 'Per', lead: 42, mail: 38 },
-    { name: 'Cum', lead: 35, mail: 30 },
-  ];
+  const loadInsights = async () => {
+      setLoadingInsights(true);
+      try {
+          const data = await api.strategy.getInsights();
+          setInsights(data);
+      } catch (e) {
+          console.error(e);
+      } finally {
+          setLoadingInsights(false);
+      }
+  };
 
-  const COLORS = ['#6366f1', '#ec4899', '#8b5cf6', '#14b8a6', '#94a3b8'];
+  const handleSendReport = async () => {
+      if (!stats) return;
+      setSendingReport(true);
+      try {
+          const hotLeads = leads.filter(l => l.lead_skoru >= 4 && l.lead_durumu !== 'olumlu').slice(0, 5);
+          const result = await api.whatsapp.sendReport(stats, hotLeads);
+          
+          if (result.status === 'cancelled') return;
+
+          const isWebMode = result.status === 'fallback_web';
+          
+          await api.dashboard.logAction(
+              'WhatsApp Raporu', 
+              isWebMode ? 'WhatsApp Web açıldı (Manuel)' : 'API ile iletildi', 
+              'success'
+          );
+          
+          if (isWebMode) {
+              alert("WhatsApp Web açıldı. Lütfen açılan pencereden 'Gönder' butonuna basın.");
+          } else {
+              alert("Rapor API üzerinden gönderildi!");
+          }
+      } catch (error) {
+          console.error(error);
+          alert("Gönderim başarısız.");
+      } finally {
+          setSendingReport(false);
+      }
+  };
+
+  const handlePlayBriefing = async () => {
+      setBriefingStatus('loading');
+      try {
+          await api.briefing.generateAndPlay();
+          setBriefingStatus('playing');
+          setTimeout(() => setBriefingStatus('idle'), 15000); 
+      } catch (error) {
+          console.error(error);
+          alert("Brifing oluşturulamadı.");
+          setBriefingStatus('idle');
+      }
+  };
 
   if (loading) {
       return (
@@ -76,64 +160,196 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {/* Header Actions */}
+      <div className="flex justify-end mb-4 gap-3">
+          <button 
+            onClick={handlePlayBriefing}
+            disabled={briefingStatus !== 'idle'}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-all ${
+                briefingStatus === 'playing' ? 'bg-rose-100 text-rose-700 animate-pulse border border-rose-200' :
+                'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+              {briefingStatus === 'loading' ? <Loader2 size={16} className="animate-spin" /> : 
+               briefingStatus === 'playing' ? <Volume2 size={16} /> : <Headphones size={16} />}
+              {briefingStatus === 'loading' ? 'Hazırlanıyor...' : 
+               briefingStatus === 'playing' ? 'Çalıyor...' : 'Günlük Brifingi Dinle'}
+          </button>
+
+          <button 
+            onClick={handleSendReport}
+            disabled={sendingReport}
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+          >
+              {sendingReport ? <Loader2 size={16} className="animate-spin" /> : <MessageCircle size={16} />}
+              {sendingReport ? 'Hazırlanıyor...' : 'WhatsApp Raporu Gönder'}
+          </button>
+      </div>
+
       {/* Top Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between">
-            <div className="p-3 bg-blue-50 rounded-lg text-blue-600">
+            <div className="p-3 bg-blue-50 rounded-xl text-blue-600">
               <Building2 size={24} />
             </div>
-            <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full flex items-center gap-1">
+            <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full flex items-center gap-1 border border-emerald-100">
               <ArrowUpRight size={14} /> %85
             </span>
           </div>
           <div className="mt-4">
             <h3 className="text-slate-500 text-sm font-medium">Taranan Firma</h3>
-            <p className="text-2xl font-bold text-slate-900 mt-1">{stats.taranan_firma}<span className="text-slate-400 text-sm font-normal">/100</span></p>
+            <p className="text-3xl font-bold text-slate-900 mt-1 tracking-tight">{stats.taranan_firma}<span className="text-slate-400 text-sm font-normal ml-1">/100</span></p>
           </div>
           <div className="w-full bg-slate-100 h-1.5 rounded-full mt-4 overflow-hidden">
             <div className="bg-blue-500 h-full rounded-full" style={{ width: `${stats.hedef_orani}%` }}></div>
           </div>
         </div>
 
-        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between">
-            <div className="p-3 bg-indigo-50 rounded-lg text-indigo-600">
+            <div className="p-3 bg-indigo-50 rounded-xl text-indigo-600">
               <Mail size={24} />
             </div>
           </div>
           <div className="mt-4">
             <h3 className="text-slate-500 text-sm font-medium">Mail Gönderildi</h3>
-            <p className="text-2xl font-bold text-slate-900 mt-1">{stats.mail_gonderildi}</p>
+            <p className="text-3xl font-bold text-slate-900 mt-1 tracking-tight">{stats.mail_gonderildi}</p>
           </div>
           <p className="text-sm text-slate-400 mt-4">Bugün {stats.lead_sayisi} lead bulundu</p>
-        </div>
-
-        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div className="p-3 bg-emerald-50 rounded-lg text-emerald-600">
-              <MessageCircle size={24} />
-            </div>
-          </div>
-          <div className="mt-4">
-            <h3 className="text-slate-500 text-sm font-medium">Geri Dönüş</h3>
-            <p className="text-2xl font-bold text-slate-900 mt-1">{stats.geri_donus}</p>
-          </div>
-          <p className="text-sm text-emerald-600 mt-4 font-medium">%7.8 Dönüşüm Oranı</p>
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm relative overflow-hidden group hover:border-orange-200 transition-colors cursor-pointer">
           <div className="absolute top-0 right-0 w-24 h-24 bg-orange-100 rounded-full -mr-8 -mt-8 opacity-20 group-hover:opacity-40 transition-opacity"></div>
           <div className="flex items-center justify-between relative z-10">
-            <div className="p-3 bg-orange-50 rounded-lg text-orange-600">
+            <div className="p-3 bg-orange-50 rounded-xl text-orange-600">
               <Flame size={24} />
             </div>
           </div>
           <div className="mt-4 relative z-10">
             <h3 className="text-slate-500 text-sm font-medium">Sıcak Lead</h3>
-            <p className="text-2xl font-bold text-slate-900 mt-1">{stats.sicak_leadler}</p>
+            <p className="text-3xl font-bold text-slate-900 mt-1 tracking-tight">{stats.sicak_leadler}</p>
           </div>
-          <p className="text-sm text-orange-600 mt-4 font-medium relative z-10">Hemen aksiyon al</p>
+          <p className="text-sm text-orange-600 mt-4 font-bold relative z-10 flex items-center gap-1">Hemen aksiyon al <ArrowUpRight size={14}/></p>
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm hover:shadow-md transition-shadow">
+          <div className="flex items-center justify-between">
+            <div className="p-3 bg-green-50 rounded-xl text-green-600">
+              <DollarSign size={24} />
+            </div>
+          </div>
+          <div className="mt-4">
+            <h3 className="text-slate-500 text-sm font-medium">Tahmini Maliyet</h3>
+            <p className="text-3xl font-bold text-slate-900 mt-1 tracking-tight">${stats.toplam_maliyet.toFixed(4)}</p>
+          </div>
+          <p className="text-sm text-green-600 mt-4 font-medium">Verimli kullanım</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        {/* LIVE NEURO-TERMINAL (Replaces Action Log) */}
+        <div className="lg:col-span-2 bg-slate-900 rounded-2xl shadow-xl overflow-hidden flex flex-col border border-slate-800 h-[400px]">
+            <div className="p-4 border-b border-slate-800 bg-slate-950 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                    <div className={`w-3 h-3 rounded-full ${isAgentRunning ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
+                    <h3 className="text-sm font-bold text-slate-100 font-mono flex items-center gap-2">
+                        <Terminal size={14} className="text-indigo-400" />
+                        CANLI OTOPİLOT TERMİNALİ
+                    </h3>
+                </div>
+                <div className="flex items-center gap-3">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">
+                        GEMINI-2.5-FLASH-PREVIEW // CONNECTED
+                    </span>
+                    <button 
+                        onClick={toggleAgent}
+                        className={`p-1.5 rounded-full ${isAgentRunning ? 'text-red-400 hover:bg-red-900/20' : 'text-green-400 hover:bg-green-900/20'} transition-colors`}
+                        title={isAgentRunning ? "Durdur" : "Başlat"}
+                    >
+                        {isAgentRunning ? <PauseCircle size={16} /> : <PlayCircle size={16} />}
+                    </button>
+                </div>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-3 bg-slate-900/50 relative">
+                {/* Background Grid */}
+                <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5 pointer-events-none"></div>
+                
+                {thoughts.length === 0 ? (
+                    <div className="text-slate-600 italic text-center mt-20">
+                        Sistem hazır. Başlatmak için play butonuna basın.
+                    </div>
+                ) : (
+                    thoughts.slice().reverse().map((thought) => (
+                        <div key={thought.id} className="flex gap-3 animate-slide-in-right group">
+                            <span className="text-slate-500 flex-shrink-0 w-16">{thought.timestamp}</span>
+                            <div className="flex-1 flex gap-2">
+                                <span className={`font-bold flex-shrink-0 uppercase w-20 ${
+                                    thought.type === 'decision' ? 'text-purple-400' :
+                                    thought.type === 'action' ? 'text-indigo-400' :
+                                    thought.type === 'success' ? 'text-green-400' :
+                                    thought.type === 'error' ? 'text-red-400' :
+                                    thought.type === 'wait' ? 'text-amber-400' :
+                                    'text-blue-400'
+                                }`}>
+                                    [{thought.type}]
+                                </span>
+                                <span className="text-slate-300 group-hover:text-white transition-colors">
+                                    {thought.message}
+                                </span>
+                            </div>
+                        </div>
+                    ))
+                )}
+                <div ref={thoughtsEndRef} />
+            </div>
+        </div>
+
+        {/* AI STRATEGY WIDGET (Compact) */}
+        <div className="relative rounded-2xl shadow-xl p-6 text-white overflow-hidden group h-[400px] flex flex-col bg-gradient-to-br from-indigo-900 to-purple-900">
+            {/* Glass Background */}
+            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10"></div>
+            <div className="absolute -top-24 -right-24 w-64 h-64 bg-white rounded-full blur-[100px] opacity-10"></div>
+
+            <div className="flex justify-between items-center mb-6 relative z-10">
+                <h3 className="text-lg font-bold flex items-center gap-2">
+                    <BrainCircuit className="text-indigo-300" size={20} />
+                    Strateji Odası
+                </h3>
+                <button 
+                  onClick={loadInsights} 
+                  disabled={loadingInsights}
+                  className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-all"
+                >
+                    {loadingInsights ? <Loader2 size={16} className="animate-spin"/> : <RefreshCw size={16} />}
+                </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-4 relative z-10 custom-scrollbar pr-2">
+                {insights.length > 0 ? (
+                    insights.map((insight, idx) => (
+                        <div key={idx} className="bg-black/20 backdrop-blur-md rounded-xl p-4 border border-white/5 hover:bg-black/30 transition-colors">
+                            <div className="flex justify-between items-start mb-2">
+                                <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded border ${
+                                    insight.type === 'opportunity' ? 'bg-emerald-500/20 text-emerald-200 border-emerald-500/30' :
+                                    'bg-blue-500/20 text-blue-200 border-blue-500/30'
+                                }`}>
+                                    {insight.type === 'opportunity' ? 'Fırsat' : 'İpucu'}
+                                </span>
+                            </div>
+                            <h4 className="font-bold text-sm mb-1">{insight.title}</h4>
+                            <p className="text-xs text-indigo-100 opacity-80 leading-relaxed">{insight.description}</p>
+                        </div>
+                    ))
+                ) : (
+                    <div className="text-center py-10 text-indigo-200 text-sm">
+                        <Lightbulb size={24} className="mx-auto mb-2 opacity-50" />
+                        <p>Yeterli veri toplanıyor...</p>
+                    </div>
+                )}
+            </div>
         </div>
       </div>
 
@@ -141,15 +357,12 @@ const Dashboard: React.FC = () => {
         {/* Charts */}
         <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
           <div className="flex items-center justify-between mb-6">
-            <h3 className="font-semibold text-slate-800">Günlük Aktivite</h3>
-            <select className="text-sm border border-slate-200 rounded-lg px-3 py-1 text-slate-600 bg-slate-50 outline-none">
-              <option>Son 7 Gün</option>
-              <option>Bu Ay</option>
-            </select>
+            <h3 className="font-semibold text-slate-800">Günlük Etkileşim Analizi</h3>
+            <span className="text-xs text-slate-500">Son 7 Gün</span>
           </div>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={dailyData}>
+              <BarChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} dy={10} />
                 <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} />
@@ -157,86 +370,48 @@ const Dashboard: React.FC = () => {
                   cursor={{fill: '#f1f5f9'}}
                   contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                 />
-                <Bar dataKey="lead" fill="#6366f1" radius={[4, 4, 0, 0]} name="Leadler" barSize={32} />
-                <Bar dataKey="mail" fill="#93c5fd" radius={[4, 4, 0, 0]} name="Mailler" barSize={32} />
+                <Bar dataKey="sent" fill="#6366f1" radius={[4, 4, 0, 0]} name="Mail Gönderildi" barSize={32} />
+                <Bar dataKey="response" fill="#10b981" radius={[4, 4, 0, 0]} name="Yanıt Alındı" barSize={32} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-          <h3 className="font-semibold text-slate-800 mb-4">Sektör Dağılımı</h3>
-          <div className="h-60">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={sectorData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  paddingAngle={5}
-                  dataKey="value"
-                >
-                  {sectorData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
+        {/* Regional Performance Table */}
+        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm flex flex-col">
+          <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
+              <MapPin size={18} className="text-indigo-600"/> Bölgesel Hakimiyet
+          </h3>
+          <div className="flex-1 overflow-auto">
+              <table className="w-full text-sm text-left">
+                  <thead className="bg-slate-50 text-slate-500 font-medium">
+                      <tr>
+                          <th className="px-3 py-2 rounded-l-lg">Bölge</th>
+                          <th className="px-3 py-2">Lead</th>
+                          <th className="px-3 py-2 rounded-r-lg">Dönüşüm</th>
+                      </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                      {stats.districtBreakdown?.slice(0, 6).map((region, i) => (
+                          <tr key={i}>
+                              <td className="px-3 py-3 font-medium text-slate-800">{region.name}</td>
+                              <td className="px-3 py-3 text-slate-600">{region.totalLeads}</td>
+                              <td className="px-3 py-3">
+                                  <div className="flex items-center gap-2">
+                                      <div className="w-12 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                          <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${region.conversionRate}%` }}></div>
+                                      </div>
+                                      <span className="text-xs font-bold text-emerald-600">%{region.conversionRate.toFixed(0)}</span>
+                                  </div>
+                              </td>
+                          </tr>
+                      ))}
+                      {(!stats.districtBreakdown || stats.districtBreakdown.length === 0) && (
+                          <tr><td colSpan={3} className="px-3 py-4 text-center text-slate-400 italic">Veri yok</td></tr>
+                      )}
+                  </tbody>
+              </table>
           </div>
-          <div className="space-y-3">
-            {sectorData.map((item, index) => (
-              <div key={item.name} className="flex items-center justify-between text-sm">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[index] }}></div>
-                  <span className="text-slate-600">{item.name}</span>
-                </div>
-                <span className="font-medium text-slate-900">%{item.value}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Live Action Log */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-200 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-              <div className="absolute inset-0 bg-green-500 rounded-full animate-ping opacity-75"></div>
-            </div>
-            <h3 className="font-semibold text-slate-800">Canlı Ajan Aktiviteleri</h3>
-          </div>
-          <button className="text-slate-400 hover:text-slate-600">
-            <MoreHorizontal size={20} />
-          </button>
-        </div>
-        <div className="divide-y divide-slate-100">
-          {logs.map((log) => (
-            <div key={log.id} className="p-4 flex items-start gap-4 hover:bg-slate-50 transition-colors">
-              <span className="text-xs font-mono text-slate-400 mt-1">{log.timestamp}</span>
-              <div className="flex-1">
-                <p className="text-sm font-medium text-slate-800">
-                  {log.action}
-                  <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${
-                    log.type === 'success' ? 'bg-green-100 text-green-700' :
-                    log.type === 'error' ? 'bg-red-100 text-red-700' :
-                    log.type === 'warning' ? 'bg-amber-100 text-amber-700' :
-                    'bg-blue-100 text-blue-700'
-                  }`}>
-                    {log.type.toUpperCase()}
-                  </span>
-                </p>
-                <p className="text-sm text-slate-500 mt-1">{log.detail}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="p-3 bg-slate-50 text-center border-t border-slate-200">
-          <button className="text-sm text-indigo-600 font-medium hover:text-indigo-700">Tüm Kayıtları Gör</button>
         </div>
       </div>
     </div>

@@ -1,4 +1,5 @@
-import { Lead, Task, ActionLog, DashboardStats, Interaction } from '../types';
+
+import { Lead, Task, ActionLog, DashboardStats, Interaction, EmailTemplate } from '../types';
 
 // Mock Leads
 export const MOCK_LEADS: Lead[] = [
@@ -73,6 +74,26 @@ export const MOCK_LEADS: Lead[] = [
     lead_skoru: 1,
     eksik_alanlar: [],
     notlar: 'Websitesi mevcut.',
+  },
+  {
+    id: '6',
+    firma_adi: 'Hukuk Bürosu Yılmaz',
+    sektor: 'Diğer',
+    ilce: 'Kartal',
+    telefon: '0216 555 44 33',
+    email: 'info@yilmazhukuk.com',
+    kaynak: 'Google Maps',
+    websitesi_var_mi: 'Hayır',
+    lead_durumu: 'onay_bekliyor',
+    lead_skoru: 4,
+    eksik_alanlar: [],
+    son_kontakt_tarihi: '2024-05-21',
+    draftResponse: {
+        subject: 'Re: Web sitesi teklifi hakkında',
+        body: 'Merhaba Mehmet Bey,\n\nBütçe konusundaki endişenizi anlıyorum. Yeni açılan ofisler için hazırladığımız "Başlangıç Paketi" (Tek sayfa + İletişim) tam size göre olabilir.\n\nFiyatı 8.000 TL + KDV şeklindedir.\n\nDetayları konuşmak ister misiniz?\n\nSaygılarımla,',
+        intent: 'price_negotiation',
+        created_at: new Date().toISOString()
+    }
   }
 ];
 
@@ -183,6 +204,38 @@ export const MOCK_INTERACTIONS: Interaction[] = [
     }
 ];
 
+export const MOCK_TEMPLATES: EmailTemplate[] = [
+    {
+        id: 't-1',
+        name: 'Akıllı Tanışma (Sektörel)',
+        type: 'intro',
+        subject: '[{firma_adi}] için dijital fırsat 👋',
+        body: 'Merhaba {yetkili},\n\nİstanbul {ilce} bölgesindeki yeni işletmeleri incelerken {firma_adi} dikkatimi çekti.\n\nWeb sitenizin henüz aktif olmadığını fark ettim. {sektor_ozel_mesaj}\n\n{aksiyon_cagrisi}\n\nSaygılarımla,\nSales Agent',
+        isActive: true,
+        useCount: 150,
+        successCount: 25
+    },
+    {
+        id: 't-2',
+        name: 'Takip 1 (Merak)',
+        type: 'followup1',
+        subject: '{firma_adi} hakkında küçük bir hatırlatma',
+        body: 'Merhaba tekrar,\n\nGeçenlerde {firma_adi} web sitesi için yazmıştım, gözden kaçmış olabilir diye hatırlatmak istedim.\n\n{sektor_ozel_mesaj}\n\nSadece 10 dakikalık bir görüşme ile rakiplerinizin neler yaptığını gösterebilirim.\n\n{aksiyon_cagrisi}',
+        isActive: true,
+        useCount: 80,
+        successCount: 12
+    },
+    {
+        id: 't-3',
+        name: 'Takip 2 (Veda)',
+        type: 'followup2',
+        subject: 'Son kontrol: {firma_adi}',
+        body: 'Selamlar,\n\nSanırım şu an web sitesi önceliğiniz değil, sizi daha fazla rahatsız etmek istemem.\n\nEğer ileride düşünürseniz buradayım. {firma_adi} için başarılar dilerim!',
+        isActive: true,
+        useCount: 40,
+        successCount: 2
+    }
+];
 
 export const getStats = (): DashboardStats => ({
   taranan_firma: 85,
@@ -191,4 +244,10 @@ export const getStats = (): DashboardStats => ({
   geri_donus: 3,
   sicak_leadler: 2,
   hedef_orani: 85,
+  toplam_maliyet: 0.85,
+  districtBreakdown: [
+      { name: 'Kadıköy', totalLeads: 20, converted: 5, conversionRate: 25 },
+      { name: 'Beşiktaş', totalLeads: 15, converted: 3, conversionRate: 20 },
+      { name: 'Şişli', totalLeads: 10, converted: 2, conversionRate: 20 },
+  ]
 });

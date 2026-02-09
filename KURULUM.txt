@@ -1,0 +1,65 @@
+
+===================================================================
+   ISTANBUL AI SALES AGENT - TAM SÜRÜM KURULUM REHBERİ (v1.2)
+===================================================================
+
+Tebrikler! Sistemin en güncel "AI Fiyatlandırma" ve "Canlı Sesli Asistan" 
+özelliklerine sahip sürümünü indirdiniz.
+
+Sistemi çalıştırmak için aşağıdaki adımları takip edin.
+
+-------------------------------------------------------------------
+1. KURULUM (İLK KEZ ÇALIŞTIRMA)
+-------------------------------------------------------------------
+
+WINDOWS KULLANICILARI:
+1. Klasördeki 'setup.bat' dosyasına çift tıklayın.
+2. Açılan siyah pencerede kurulumun tamamlanmasını bekleyin.
+3. Uygulama otomatik olarak tarayıcınızda açılacaktır.
+
+MAC ve LINUX KULLANICILARI:
+1. Terminali açın ve proje klasörüne gidin.
+2. `sh setup.sh` komutunu çalıştırın.
+
+MANUEL KURULUM (Alternatif):
+1. `npm install` (Kütüphaneleri yükler)
+2. `npm run dev` (Uygulamayı başlatır)
+
+-------------------------------------------------------------------
+2. API ANAHTARI VE YAPILANDIRMA
+-------------------------------------------------------------------
+
+Google Gemini API (Zorunlu):
+- Kurulum sırasında otomatik oluşturulan `.env` dosyasını açın.
+- `API_KEY=` karşısına https://aistudio.google.com/app/apikey adresinden
+  aldığınız anahtarı yapıştırın.
+- Dosyayı kaydedin ve uygulamayı yeniden başlatın (`setup.bat` ile).
+
+-------------------------------------------------------------------
+3. YENİ EKLENEN ÖZELLİKLER NASIL KULLANILIR?
+-------------------------------------------------------------------
+
+💰 AI Fiyatlandırma Motoru:
+- "Ayarlar" > "Fiyatlandırma" sekmesine gidin.
+- Minimum maliyetinizi (Örn: 3000 TL) girin.
+- "Otomatik Paketleri Oluştur" butonuna basın.
+- Yapay zeka sizin için Başlangıç, Pro ve Kurumsal paketleri kâr marjıyla hesaplayıp oluşturacaktır.
+
+🎙️ Canlı Sesli Asistan (Live Mode):
+- Sağ üstteki menüden veya "Asistana Sor" butonundan paneli açın.
+- "Canlıya Geç" butonuna basın.
+- Mikrofon izni vererek asistanla sesli konuşup rapor isteyebilirsiniz.
+
+☁️ Firebase Bulut Yedekleme:
+- Verilerinizin kaybolmaması için "Ayarlar" > "Bulut (Firebase)" sekmesinden
+  kendi Firebase proje bilgilerinizi girmeniz önerilir.
+
+-------------------------------------------------------------------
+4. ÜRETİM (PRODUCTION) MODU
+-------------------------------------------------------------------
+Eğer bu uygulamayı bir sunucuda yayınlamak isterseniz:
+
+1. `npm run build` komutunu çalıştırın.
+2. `dist` klasöründe oluşan dosyaları herhangi bir statik sunucuya (Vercel, Netlify, FTP vb.) yükleyin.
+
+İyi çalışmalar ve bol satışlar!

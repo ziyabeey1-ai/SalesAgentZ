@@ -1,5 +1,5 @@
 
-import { Lead, DashboardStats, Task, ActionLog, Interaction, EmailTemplate, InteractionAnalysis, InteractionType, CalendarEvent, UserProfile, PricingPackage } from '../types';
+import { Lead, DashboardStats, Task, ActionLog, Interaction, EmailTemplate, InteractionAnalysis, InteractionType } from '../types';
 import { sheetsService } from './googleSheetsService';
 import { gmailService } from './gmailService';
 import { whatsappService } from './whatsappService';
@@ -12,8 +12,6 @@ import { decodeAudioData, playAudioBuffer, base64ToArrayBuffer } from '../utils/
 const useSheets = () => {
     return sheetsService.isAuthenticated && localStorage.getItem('sheetId');
 };
-
-const getApiKey = () => process.env.API_KEY || localStorage.getItem('apiKey') || '';
 
 export const api = {
   leads: {
@@ -37,7 +35,7 @@ export const api = {
     update: async (lead: Lead): Promise<void> => {
         // Gamification Check: Won?
         if (lead.lead_durumu === 'olumlu') {
-             // Only if it wasn't already won
+             // Only if it wasn't already won (simple check logic would be needed in real app to avoid dupes)
              gamificationService.recordAction('deal_won');
         }
 
@@ -78,11 +76,11 @@ export const api = {
   },
   
   gmail: {
-      send: async (to: string, subject: string, body: string, attachments?: { filename: string, content: string, mimeType: string }[]) => {
+      send: async (to: string, subject: string, body: string) => {
           gamificationService.recordAction('email_sent');
           
           if (useSheets()) {
-              return await gmailService.sendEmail(to, subject, body, attachments);
+              return await gmailService.sendEmail(to, subject, body);
           }
           // Simulate email sending delay
           await new Promise(resolve => setTimeout(resolve, 800));
@@ -163,11 +161,6 @@ export const api = {
       },
       delete: async (id: string) => {
           storage.deleteTemplate(id);
-      },
-      generateABVariants: async (template: EmailTemplate) => {
-          // AI Generation Placeholder
-          // In a real implementation, call Gemini here
-          return [];
       }
   },
 
@@ -229,7 +222,7 @@ export const api = {
 
   briefing: {
       generateAndPlay: async () => {
-          const apiKey = getApiKey();
+          const apiKey = process.env.API_KEY || '';
           const ai = new GoogleGenAI({ apiKey });
 
           // 1. Gather Data
@@ -290,7 +283,7 @@ export const api = {
 
   training: {
       evaluateSession: async (transcript: string, scenario: string) => {
-          const apiKey = getApiKey();
+          const apiKey = process.env.API_KEY || '';
           const ai = new GoogleGenAI({ apiKey });
 
           const prompt = `
@@ -329,78 +322,6 @@ export const api = {
           }
 
           return data;
-      }
-  },
-
-  strategy: {
-      getInsights: async () => {
-          // AI Logic Placeholder
-          return [];
-      }
-  },
-
-  competitors: {
-      analyze: async (lead: Lead) => {
-          // AI Logic Placeholder
-          return { competitors: [], summary: 'Analiz yapılıyor...', lastUpdated: new Date().toISOString() };
-      }
-  },
-
-  visuals: {
-      generateHeroImage: async (lead: Lead): Promise<string> => {
-          // Mock or AI logic
-          return 'https://via.placeholder.com/800x400';
-      },
-      generateSocialPostImage: async (prompt: string): Promise<string> => {
-          return 'https://via.placeholder.com/400';
-      }
-  },
-
-  social: {
-      analyzeInstagram: async (lead: Lead) => {
-          return { username: '@mock', bio: 'Mock bio', recentPostTheme: 'Mock', suggestedDmOpener: 'Hello', lastAnalyzed: new Date().toISOString() };
-      }
-  },
-
-  setup: {
-      generatePackages: async (baseCost: number, margin: number, serviceType: string): Promise<PricingPackage[]> => {
-          return [
-              { id: '1', name: 'Başlangıç', price: baseCost * (1 + margin/100), cost: baseCost, profit: baseCost * (margin/100), features: ['Temel'], description: 'Desc' }
-          ];
-      },
-      generateInitialTemplates: async (packages: PricingPackage[]): Promise<EmailTemplate[]> => {
-          return [];
-      }
-  },
-
-  calendar: {
-      getAll: async (): Promise<CalendarEvent[]> => {
-          if (useSheets()) {
-              return await sheetsService.getCalendarEvents();
-          }
-          return storage.getCalendarEvents();
-      },
-      create: async (event: Partial<CalendarEvent>): Promise<string> => {
-          const newEvent: CalendarEvent = {
-              id: Math.random().toString(36).substr(2, 9),
-              title: event.title || 'Yeni Etkinlik',
-              start: event.start || new Date().toISOString(),
-              end: event.end || new Date().toISOString(),
-              description: event.description || '',
-              location: event.location || '',
-              attendees: event.attendees || [],
-              type: event.type || 'meeting'
-          };
-          
-          if (useSheets()) {
-              // Google Calendar API returns the real link
-              return await sheetsService.createCalendarEvent(newEvent);
-          } else {
-              // Local Storage Mock Logic
-              storage.saveCalendarEvent(newEvent);
-              // Return a mock link for local testing if requested
-              return event.location === 'Google Meet' ? `https://meet.google.com/mock-${Math.random().toString(36).substr(2,5)}` : '';
-          }
       }
   }
 };

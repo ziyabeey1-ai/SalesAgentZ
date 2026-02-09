@@ -1,356 +1,693 @@
-import React, { useState } from 'react';
-import { Mail, Clock, CheckCircle, AlertCircle, Pause, Play, RefreshCw, User, ChevronRight, MapPin, CalendarClock, Send } from 'lucide-react';
-import { MOCK_LEADS, MOCK_INTERACTIONS } from '../services/mockService';
-import { Lead } from '../types';
 
-// Helper to find last interaction
-const getLastInteraction = (leadId: string) => {
-  const interactions = MOCK_INTERACTIONS
-    .filter(i => i.leadId === leadId && i.direction === 'outbound' && i.type === 'email')
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  return interactions.length > 0 ? interactions[0] : null;
+import React, { useState, useEffect } from 'react';
+import { Mail, Clock, CheckCircle, AlertCircle, Pause, Play, RefreshCw, User, ChevronRight, MapPin, CalendarClock, Send, Loader2, Zap, Filter, Wand2, Sparkles, PenTool, Layout, Plus, Edit2, Trash2, Save, FileText, BarChart2, MessageSquare, ThumbsUp, XCircle, Eye, TestTube, ArrowUpRight, ArrowRight, MousePointerClick, Star, BrainCircuit, Image as ImageIcon, Check, X, TrendingUp } from 'lucide-react';
+import { api } from '../services/api';
+import { Lead, Interaction, EmailTemplate, TemplateStats, ABVariant } from '../types';
+import { GoogleGenAI } from "@google/genai";
+import { SYSTEM_PROMPT, SECTORS } from '../constants';
+import { useAgent } from '../context/AgentContext';
+import { storage } from '../services/storage';
+import EmptyState from '../components/EmptyState';
+
+// Helper to get API Key
+const getApiKey = () => process.env.API_KEY || localStorage.getItem('apiKey') || '';
+
+// --- HELPER FUNCTIONS ---
+
+const getDaysDifference = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffTime = Math.abs(now.getTime() - date.getTime());
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
 };
 
-// Email Template Logic
-const generateEmailContent = (lead: Lead, templateType: 'intro' | 'followup1' | 'followup2') => {
-  const isHighScore = lead.lead_skoru >= 4;
-  const lastInteraction = getLastInteraction(lead.id);
-  const district = lead.ilce || 'İstanbul';
-  
-  let subject = '';
-  let body = '';
-  let reasoning: string[] = [];
+// --- COMPONENT ---
 
-  if (templateType === 'intro') {
-    reasoning.push(`Sektör: ${lead.sektor}`);
-    reasoning.push(`Lokasyon: ${district} vurgusu`);
-    
-    switch (lead.sektor) {
-      case 'Sağlık':
-        subject = `[${lead.firma_adi}] için hasta güveni ve online randevu`;
-        body = `Merhaba ${lead.yetkili_adi || 'Yetkili'},\n\n${district} bölgesinde yeni açılan klinikler için, hastaların güvenini kazanan ve **randevu sürecini otomatize eden** web siteleri kuruyorum.\n\nAraştırmalarıma göre ${district} bölgesindeki hastaların %80'i randevu almadan önce Google'da "doktor yorumları" ve "klinik fotoğrafları" aratıyor.\n\nSizin için hazırlayacağım yapı ile:\n\n*   **Online Randevu:** Telefon trafiğini azaltın.\n*   **Doktor Tanıtımı:** Uzmanlığınızı öne çıkarın.\n*   **Konum:** ${district} aramalarında öne çıkın.\n\nSize özel bir taslak hazırladım. Görmek ister misiniz?`;
-        break;
-      case 'Restoran':
-        subject = `[${lead.firma_adi}] için QR menü ve Google'da öne çıkma`;
-        body = `Merhaba ${lead.yetkili_adi || 'Yetkili'},\n\n${district} semtindeki rekabette, müşterilerinizin acıktığında menünüze saniyeler içinde ulaşması kritik önem taşıyor.\n\nRestoranınız için kurguladığım sistem:\n\n*   **QR Menü:** Masada ve Instagram'da kullanılabilir.\n*   **Hızlı Rezervasyon:** Tek tıkla masa ayırtma.\n*   **Google Maps:** ${district} yemek aramalarında görünürlük.\n\nLezzetlerinizi dijitalde nasıl sunabileceğimize dair 1-2 örnek paylaşabilir miyim?`;
-        break;
-      case 'Emlak':
-        subject = `[${lead.firma_adi}] portföyünü kurumsal web sitenizde sergileyin`;
-        body = `Merhaba ${lead.yetkili_adi || 'Yetkili'},\n\nİlan sitelerine bağımlı kalmadan, ${district} bölgesindeki portföyünüzü kendi kurumsal sitenizde sergilemek ister misiniz?\n\nKendi alan adınızla (.com) kuracağımız site sayesinde:\n\n*   **Prestij:** Müşterilerinize kurumsal bir link gönderin.\n*   **Komisyonsuz:** Kendi vitrininizi yönetin.\n*   **WhatsApp:** İlan detayından size direkt mesaj atsınlar.\n\nDemo sunumu için kısa bir görüşme yapalım mı?`;
-        break;
-      case 'Güzellik':
-        subject = `[${lead.firma_adi}] randevularını 7/24 otomatik doldurun`;
-        body = `Merhaba ${lead.yetkili_adi || 'Yetkili'},\n\n${district} bölgesindeki yoğunluğunuzda telefonlara yetişmek zor olabiliyor. Randevuları kaçırmamanız için size özel bir sistem geliştirdim.\n\nSizin için hazırlayacağım web sitesi ile:\n\n*   **7/24 Randevu:** Siz işlem yaparken müşteriniz randevu alsın.\n*   **Instagram Entegrasyonu:** Paylaşımlarınız direkt sitede görünsün.\n*   **Hizmet Kataloğu:** Fiyatlarınızı ve işlemlerinizi şıkça sunun.\n\n${district} bölgesindeki rakiplerinizden ayrışmak için size özel taslağı incelemek ister misiniz?`;
-        break;
-      default:
-        subject = `[${lead.firma_adi}] dijital varlığı hakkında`;
-        body = `Merhaba ${lead.yetkili_adi || 'Yetkili'},\n\nİstanbul'da yeni açılan işletmelere, müşteri kazandıran modern web siteleri kuruyorum.\n\nİşletmenizin ${district} bölgesindeki aramalarda öne çıkması ve güven vermesi için size özel bir çalışmam var.\n\nUygunsa 10 dakikalık kısa bir görüşme ile detayları aktarmak isterim.`;
-        break;
-    }
-  } else if (templateType === 'followup1') {
-    const timeRef = lastInteraction ? `${lastInteraction.date} tarihinde` : 'geçenlerde';
-    if (lastInteraction) reasoning.push('Geçmiş Referanslı');
-
-    if (isHighScore) {
-      reasoning.push('Skor Yüksek: Doğrudan & Aciliyet');
-      subject = `Hızlı aksiyon: [${lead.firma_adi}] ve dijital süreç`;
-      body = `Merhaba ${lead.yetkili_adi || 'Yetkili'},\n\n${timeRef} gönderdiğim e-postanın üzerinden geçmek istedim.\n\n${lead.sektor} sektörü şu an hareketli ve web sitenizi bu hafta planlarsak önümüzdeki hafta yayına alabiliriz.\n\nSüreci uzatmak istemiyorum; işletmeniz için hazırladığım taslağı 10 dakikalık bir görüşmede sunabilirim.\n\nYarın 11:00 veya 14:00 size uyar mı?`;
-    } else {
-      reasoning.push('Skor Düşük: Fayda & Bilgi');
-      subject = `[${lead.firma_adi}] için faydalı bir kaynak`;
-      body = `Merhaba ${lead.yetkili_adi || 'Yetkili'},\n\n${timeRef} web sitesi hakkında yazmıştım ancak henüz dönüş alamadım. Yoğun olduğunuzu tahmin ediyorum.\n\nKarar vermeden önce incelemeniz için, ${lead.sektor} işletmelerinin web sitesi ile nasıl %30 daha fazla müşteri kazandığını anlatan kısa bir not hazırladım.\n\nBütçe ayırmadan önce sadece fikir edinmek isterseniz yanıtlamanız yeterli, iletmekten memnuniyet duyarım.`;
-    }
-  } else if (templateType === 'followup2') {
-     if (isHighScore) {
-        reasoning.push('Skor Yüksek: Netlik & Kapanış');
-        subject = `Son kontrol: [${lead.firma_adi}] proje durumu`;
-        body = `Merhaba,\n\nDoğru kişiyle mi iletişimdeyim emin olmak istedim.\n\n${lead.sektor} projeniz için takvimimde yer ayırmıştım ancak geri dönüş alamadım. Şu an bu konu önceliğiniz değilse dosyayı kapatıyorum.\n\nEğer ilgileniyorsanız lütfen bugün kısa bir dönüş yapın.\n\nSaygılarımla.`;
-     } else {
-        reasoning.push('Skor Düşük: Nezaket & Açık Kapı');
-        subject = `[${lead.firma_adi}] dijitalleşme süreci hakkında`;
-        body = `Merhaba,\n\nSizi tekrar tekrar rahatsız etmek istemem.\n\n${lead.sektor} sektöründeki dijital varlığınızla ilgili şu an bir adım atmayı düşünmüyorsanız sorun değil.\n\nİleride ihtiyacınız olursa portfolyomu ve referanslarımı inceleyebileceğiniz linki buraya bırakıyorum.\n\nİyi çalışmalar dilerim.`;
-     }
-  }
-  return { subject, body, reasoning };
-};
+interface QueueItem {
+    id: string;
+    lead: Lead;
+    template: 'intro' | 'followup1' | 'followup2';
+    reason: string;
+    status: 'pending' | 'sending' | 'sent' | 'error' | 'waiting_assets';
+    generatedContent?: { subject: string; body: string };
+}
 
 const MailAutomation: React.FC = () => {
-  const [selectedLeadId, setSelectedLeadId] = useState<string>(MOCK_LEADS[0].id);
-  const [selectedTemplate, setSelectedTemplate] = useState<'intro' | 'followup1' | 'followup2'>('intro');
-  const [isRunning, setIsRunning] = useState(true);
-  const [sendFeedback, setSendFeedback] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'approval' | 'queue' | 'templates' | 'lab'>('queue');
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [templates, setTemplates] = useState<EmailTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
   
-  // Queue State
-  const [queue, setQueue] = useState([
-    { id: 1, firm: 'Kadıköy Burger', template: 'Follow-up 1 (Düşük Skor)', time: 'Bugün, 14:15', status: 'pending' },
-    { id: 2, firm: 'Zen Yoga', template: 'Follow-up 2 (Yüksek Skor)', time: 'Bugün, 14:30', status: 'pending' },
-    { id: 3, firm: 'Dr. Ahmet Klinik', template: 'İlk Tanışma (Sağlık)', time: 'Bugün, 14:45', status: 'pending' },
-  ]);
+  // Template Management State
+  const [editingTemplate, setEditingTemplate] = useState<Partial<EmailTemplate> | null>(null);
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
 
-  const selectedLead = MOCK_LEADS.find(l => l.id === selectedLeadId) || MOCK_LEADS[0];
-  const emailContent = generateEmailContent(selectedLead, selectedTemplate);
-  const lastInteraction = getLastInteraction(selectedLead.id);
+  // Approval State
+  const [selectedDraft, setSelectedDraft] = useState<Lead | null>(null);
+  const [draftSubject, setDraftSubject] = useState('');
+  const [draftBody, setDraftBody] = useState('');
+  const [isSendingDraft, setIsSendingDraft] = useState(false);
 
-  const handleRemoveFromQueue = (id: number) => {
-    setQueue(queue.filter(item => item.id !== id));
+  // Lab State
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
+  const [abVariants, setAbVariants] = useState<ABVariant[]>([]);
+  const [isGeneratingVariants, setIsGeneratingVariants] = useState(false);
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+      setLoading(true);
+      try {
+          const [leadsData, templatesData] = await Promise.all([
+              api.leads.getAll(),
+              api.templates.getAll()
+          ]);
+          setLeads(leadsData);
+          setTemplates(templatesData);
+          if (templatesData.length > 0 && !selectedTemplateId) setSelectedTemplateId(templatesData[0].id);
+          calculateQueue(leadsData);
+      } catch (error) {
+          console.error("Data load failed", error);
+      } finally {
+          setLoading(false);
+      }
   };
 
-  const handleTestSend = () => {
-    setSendFeedback('Gönderiliyor...');
-    setTimeout(() => {
-        setSendFeedback('✓ Test Maili Gönderildi');
-        setTimeout(() => setSendFeedback(null), 3000);
-    }, 800);
+  const calculateQueue = (leadsData: Lead[]) => {
+      const newQueue: QueueItem[] = [];
+      leadsData.forEach(lead => {
+          if (!lead.email) return;
+
+          // Rule 1: Active & No Contact -> Intro
+          if (lead.lead_durumu === 'aktif' && !lead.son_kontakt_tarihi) {
+              const needsVisual = !lead.generatedHeroImage;
+              newQueue.push({
+                  id: `q-${lead.id}-intro`,
+                  lead,
+                  template: 'intro',
+                  reason: needsVisual ? 'Görsel Hazırlanıyor' : 'Yeni Lead (Hazır)',
+                  status: needsVisual ? 'waiting_assets' : 'pending'
+              });
+          }
+          // Rule 2: Active & Contacted > 3 days ago -> Follow-up 1
+          else if (lead.lead_durumu === 'takipte' && lead.son_kontakt_tarihi) {
+              const daysSince = getDaysDifference(lead.son_kontakt_tarihi);
+              
+              if (daysSince >= 3 && daysSince < 7) {
+                   newQueue.push({
+                      id: `q-${lead.id}-f1`,
+                      lead,
+                      template: 'followup1',
+                      reason: `Son temas ${daysSince} gün önce`,
+                      status: 'pending'
+                  });
+              } else if (daysSince >= 7) {
+                  newQueue.push({
+                      id: `q-${lead.id}-f2`,
+                      lead,
+                      template: 'followup2',
+                      reason: `Son temas ${daysSince} gün önce`,
+                      status: 'pending'
+                  });
+              }
+          }
+      });
+      setQueue(newQueue);
   };
+
+  // --- MAILING LOGIC (QUEUE) ---
+  const applyTemplate = (lead: Lead, type: string) => {
+      const template = templates.find(t => t.type === type && t.isActive) || templates[0];
+      if (!template) return { subject: 'Merhaba', body: '...' };
+      let body = template.body.replace(/{firma_adi}/g, lead.firma_adi).replace(/{yetkili}/g, lead.yetkili_adi || 'Yetkili').replace(/{ilce}/g, lead.ilce);
+      return { subject: template.subject.replace(/{firma_adi}/g, lead.firma_adi), body, templateId: template.id };
+  };
+
+  const processQueueItem = async (item: QueueItem) => {
+      if (item.status === 'waiting_assets') return; 
+      setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'sending' } : q));
+
+      try {
+          const content = applyTemplate(item.lead, item.template);
+          
+          let attachments = [];
+          if (item.lead.generatedHeroImage) {
+               const base64Content = item.lead.generatedHeroImage.split(',')[1];
+               attachments.push({ filename: 'onizleme.png', content: base64Content, mimeType: 'image/png' });
+          }
+
+          await api.gmail.send(item.lead.email, content.subject, content.body, attachments);
+
+          const updatedLead = { 
+              ...item.lead, 
+              lead_durumu: 'takipte' as any, 
+              son_kontakt_tarihi: new Date().toISOString().slice(0, 10),
+              lastUsedTemplateId: content.templateId
+          };
+          await api.leads.update(updatedLead);
+          
+          // Increment template usage
+          if (content.templateId) {
+              // Note: storage service handles stats increment, but UI needs reload or local update
+              // We just refresh data for simplicity
+          }
+
+          setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'sent' } : q));
+          loadData(); // Refresh to update leads list
+          
+      } catch (error) {
+          setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error' } : q));
+      }
+  };
+
+  // --- APPROVAL LOGIC ---
+  const openDraft = (lead: Lead) => {
+      if (lead.draftResponse) {
+          setSelectedDraft(lead);
+          setDraftSubject(lead.draftResponse.subject);
+          setDraftBody(lead.draftResponse.body);
+      }
+  };
+
+  const handleApproveSend = async () => {
+      if (!selectedDraft) return;
+      setIsSendingDraft(true);
+
+      try {
+          await api.gmail.send(selectedDraft.email, draftSubject, draftBody);
+          
+          // Update Lead
+          const updatedLead: Lead = {
+              ...selectedDraft,
+              lead_durumu: 'takipte', // or 'teklif_gonderildi' depending on intent, but 'takipte' is safe
+              draftResponse: undefined, // Clear draft
+              son_kontakt_tarihi: new Date().toISOString().slice(0, 10)
+          };
+          
+          await api.leads.update(updatedLead);
+          
+          // Log
+          await api.dashboard.logAction('Yanıt Onaylandı', `${selectedDraft.firma_adi} mail gönderildi`, 'success');
+          
+          setSelectedDraft(null);
+          loadData();
+      } catch (error) {
+          console.error(error);
+          alert("Gönderim başarısız.");
+      } finally {
+          setIsSendingDraft(false);
+      }
+  };
+
+  const handleDiscardDraft = async () => {
+      if (!selectedDraft) return;
+      if (confirm("Bu taslağı silmek istediğinize emin misiniz?")) {
+          const updatedLead: Lead = {
+              ...selectedDraft,
+              draftResponse: undefined,
+              lead_durumu: 'takipte' // Revert to follow-up status
+          };
+          await api.leads.update(updatedLead);
+          setSelectedDraft(null);
+          loadData();
+      }
+  };
+
+  // --- TEMPLATE LOGIC ---
+  const handleSaveTemplate = async () => {
+      if (!editingTemplate || !editingTemplate.name || !editingTemplate.subject) return;
+      
+      const newTemplate: EmailTemplate = {
+          id: editingTemplate.id || Math.random().toString(36).substr(2, 9),
+          name: editingTemplate.name,
+          type: editingTemplate.type || 'intro',
+          subject: editingTemplate.subject,
+          body: editingTemplate.body || '',
+          isActive: editingTemplate.isActive ?? true,
+          useCount: editingTemplate.useCount || 0,
+          successCount: editingTemplate.successCount || 0,
+          origin: 'human',
+          iteration: 1
+      };
+
+      if (editingTemplate.id) {
+          await api.templates.update(newTemplate);
+      } else {
+          await api.templates.save(newTemplate);
+      }
+      
+      setIsTemplateModalOpen(false);
+      setEditingTemplate(null);
+      loadData();
+  };
+
+  const handleDeleteTemplate = async (id: string) => {
+      if (confirm("Şablonu silmek istediğinize emin misiniz?")) {
+          await api.templates.delete(id);
+          loadData();
+      }
+  };
+
+  // --- A/B LAB LOGIC (Existing) ---
+  const handleGenerateVariants = async () => {
+      const currentTemplate = templates.find(t => t.id === selectedTemplateId);
+      if (!currentTemplate) return;
+
+      setIsGeneratingVariants(true);
+      try {
+          const variants = await api.templates.generateABVariants(currentTemplate);
+          setAbVariants(variants);
+      } catch (error) {
+          console.error(error);
+          alert("Varyasyon oluşturulamadı.");
+      } finally {
+          setIsGeneratingVariants(false);
+      }
+  };
+
+  const handleApplyVariant = async (variant: ABVariant) => {
+      const currentTemplate = templates.find(t => t.id === selectedTemplateId);
+      if (!currentTemplate) return;
+
+      if(confirm(`"${currentTemplate.name}" şablonu seçilen varyasyon ile güncellensin mi?`)) {
+          const updatedTemplate: EmailTemplate = {
+              ...currentTemplate,
+              subject: variant.subject,
+              body: variant.body,
+              iteration: (currentTemplate.iteration || 1) + 1,
+              performanceScore: variant.predictedOpenRate,
+              origin: 'ai_auto'
+          };
+          
+          await api.templates.update(updatedTemplate);
+          setTemplates(prev => prev.map(t => t.id === updatedTemplate.id ? updatedTemplate : t));
+          setAbVariants([]);
+          alert("Şablon güncellendi!");
+      }
+  };
+
+  if (loading) return <div className="p-12 text-center"><Loader2 className="animate-spin inline text-indigo-600"/></div>;
+
+  const drafts = leads.filter(l => l.lead_durumu === 'onay_bekliyor' && l.draftResponse);
+  const activeTemplate = templates.find(t => t.id === selectedTemplateId);
 
   return (
-    <div className="space-y-8">
-      {/* Control Panel */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900">Otomasyon Durumu</h2>
-            <p className="text-sm text-slate-500">Outreach kuyruğu ve gönderim durumu</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="flex h-3 w-3 relative">
-              {isRunning && (
-                <span className="animate-ping absolute inline-flex h-3 w-3 rounded-full bg-green-400 opacity-75"></span>
-              )}
-              <span className={`relative inline-flex rounded-full h-3 w-3 ${isRunning ? 'bg-green-500' : 'bg-red-500'}`}></span>
-            </span>
-            <span className={`text-sm font-medium ${isRunning ? 'text-green-600' : 'text-red-600'}`}>
-              {isRunning ? 'Çalışıyor' : 'Durduruldu'}
-            </span>
-            <button 
-              onClick={() => setIsRunning(!isRunning)}
-              className={`ml-4 flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isRunning 
-                  ? 'bg-red-50 hover:bg-red-100 text-red-700' 
-                  : 'bg-green-50 hover:bg-green-100 text-green-700'
-              }`}
-            >
-              {isRunning ? <Pause size={16} /> : <Play size={16} />} 
-              {isRunning ? 'Durdur' : 'Başlat'}
-            </button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className={`p-4 border rounded-lg transition-colors ${isRunning ? 'bg-indigo-50 border-indigo-100' : 'bg-slate-50 border-slate-200 opacity-75'}`}>
-            <div className="flex items-center gap-3 mb-2">
-              <Clock className={isRunning ? 'text-indigo-600' : 'text-slate-400'} size={20} />
-              <h3 className={`font-semibold ${isRunning ? 'text-indigo-900' : 'text-slate-600'}`}>Kuyrukta</h3>
-            </div>
-            <p className={`text-2xl font-bold ${isRunning ? 'text-indigo-700' : 'text-slate-700'}`}>{queue.length}</p>
-            <p className={`text-xs mt-1 ${isRunning ? 'text-indigo-600' : 'text-slate-500'}`}>{isRunning ? 'Sonraki gönderim: 14:00' : 'Gönderim duraklatıldı'}</p>
-          </div>
-          <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-lg">
-            <div className="flex items-center gap-3 mb-2">
-              <CheckCircle className="text-emerald-600" size={20} />
-              <h3 className="font-semibold text-emerald-900">Bugün Gönderilen</h3>
-            </div>
-            <p className="text-2xl font-bold text-emerald-700">38</p>
-            <p className="text-xs text-emerald-600 mt-1">Başarı oranı %98</p>
-          </div>
-          <div className="p-4 bg-red-50 border border-red-100 rounded-lg">
-            <div className="flex items-center gap-3 mb-2">
-              <AlertCircle className="text-red-600" size={20} />
-              <h3 className="font-semibold text-red-900">Hatalı / Bounce</h3>
-            </div>
-            <p className="text-2xl font-bold text-red-700">2</p>
-            <p className="text-xs text-red-600 mt-1">Kontrol gerekiyor</p>
-          </div>
-        </div>
+    <div className="space-y-6 animate-fade-in pb-12">
+      {/* Tabs */}
+      <div className="flex gap-2 p-1 bg-slate-100 rounded-xl w-fit mb-6 overflow-x-auto">
+          {(['queue', 'approval', 'templates', 'lab'] as const).map(tab => (
+              <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap flex items-center gap-2 ${activeTab === tab ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                  {tab === 'queue' && <Clock size={16}/>}
+                  {tab === 'approval' && <CheckCircle size={16}/>}
+                  {tab === 'templates' && <FileText size={16}/>}
+                  {tab === 'lab' && <TestTube size={16}/>}
+                  {tab === 'queue' ? 'Kuyruk' : tab === 'approval' ? 'Yanıt Onayı' : tab === 'templates' ? 'Şablonlar' : 'A/B Lab'}
+                  {tab === 'approval' && drafts.length > 0 && <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">{drafts.length}</span>}
+              </button>
+          ))}
       </div>
 
-       {/* Personalization Simulator */}
-       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Controls */}
-          <div className="lg:col-span-4 space-y-6">
-            <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm h-full">
-              <div className="flex items-center gap-2 mb-4">
-                <RefreshCw size={20} className="text-indigo-600" />
-                <h3 className="font-semibold text-slate-900">Kişiselleştirme Simülatörü</h3>
-              </div>
-              <p className="text-sm text-slate-500 mb-6">
-                Farklı lead profillerine göre yapay zekanın mail içeriğini nasıl değiştirdiğini test edin.
-              </p>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Test Lead Seçimi</label>
-                  <div className="space-y-2">
-                    {MOCK_LEADS.slice(0, 4).map((lead) => (
-                      <button
-                        key={lead.id}
-                        onClick={() => setSelectedLeadId(lead.id)}
-                        className={`w-full flex items-center justify-between p-3 rounded-lg border text-sm transition-all ${
-                          selectedLeadId === lead.id 
-                            ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500' 
-                            : 'border-slate-200 hover:border-indigo-300 hover:bg-slate-50'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
-                            selectedLeadId === lead.id ? 'bg-indigo-200 text-indigo-700' : 'bg-slate-100 text-slate-500'
-                          }`}>
-                            {lead.firma_adi.substring(0, 2).toUpperCase()}
-                          </div>
-                          <div className="text-left">
-                            <div className="font-medium text-slate-900">{lead.firma_adi}</div>
-                            <div className="text-xs text-slate-500">{lead.sektor} • {lead.ilce}</div>
-                          </div>
-                        </div>
-                        {selectedLeadId === lead.id && <ChevronRight size={16} className="text-indigo-600" />}
-                      </button>
-                    ))}
+      {activeTab === 'queue' && (
+          <div className="space-y-6">
+              <div className="flex justify-between items-center">
+                  <div>
+                      <h3 className="text-lg font-bold text-slate-800">Akıllı Kuyruk</h3>
+                      <p className="text-sm text-slate-500">Otomatik gönderim bekleyen iletiler.</p>
                   </div>
-                </div>
-
-                <div>
-                   <label className="block text-sm font-medium text-slate-700 mb-2">Şablon Tipi</label>
-                   <div className="grid grid-cols-3 gap-2">
-                      <button 
-                        onClick={() => setSelectedTemplate('intro')}
-                        className={`px-3 py-2 text-xs font-medium rounded-lg border ${
-                          selectedTemplate === 'intro' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                        }`}
-                      >
-                        İlk Tanışma
-                      </button>
-                      <button 
-                         onClick={() => setSelectedTemplate('followup1')}
-                         className={`px-3 py-2 text-xs font-medium rounded-lg border ${
-                          selectedTemplate === 'followup1' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                        }`}
-                      >
-                        Takip 1
-                      </button>
-                      <button 
-                         onClick={() => setSelectedTemplate('followup2')}
-                         className={`px-3 py-2 text-xs font-medium rounded-lg border ${
-                          selectedTemplate === 'followup2' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                        }`}
-                      >
-                        Takip 2
-                      </button>
-                   </div>
-                </div>
+                  <button onClick={() => calculateQueue(leads)} className="p-2 bg-slate-100 rounded hover:bg-slate-200"><RefreshCw size={16}/></button>
               </div>
-              
-              {/* Context Info Box */}
-              <div className="mt-6 p-4 bg-slate-50 rounded-lg border border-slate-100">
-                  <h4 className="text-xs font-semibold text-slate-500 uppercase mb-2">Seçili Bağlam</h4>
-                  <div className="space-y-2 text-sm text-slate-700">
-                      <div className="flex items-center gap-2">
-                          <MapPin size={14} className="text-slate-400"/>
-                          <span>Bölge: <b>{selectedLead.ilce}</b></span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                          <CalendarClock size={14} className="text-slate-400"/>
-                          <span>Son Etkileşim: <b>{lastInteraction ? lastInteraction.date : 'Yok'}</b></span>
-                      </div>
-                  </div>
+              <div className="bg-white border rounded-xl overflow-hidden shadow-sm">
+                  <table className="w-full text-left text-sm">
+                      <thead className="bg-slate-50 border-b text-slate-500">
+                          <tr>
+                              <th className="px-6 py-3">Firma</th>
+                              <th className="px-6 py-3">Durum</th>
+                              <th className="px-6 py-3">Sebep</th>
+                              <th className="px-6 py-3">Aksiyon</th>
+                          </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                          {queue.map(item => (
+                              <tr key={item.id} className="hover:bg-slate-50">
+                                  <td className="px-6 py-3 font-medium">{item.lead.firma_adi}</td>
+                                  <td className="px-6 py-3">
+                                      {item.status === 'waiting_assets' ? (
+                                          <span className="flex items-center gap-1 text-amber-600 bg-amber-50 px-2 py-1 rounded-full text-xs font-bold w-fit">
+                                              <ImageIcon size={12}/> Görsel Bekliyor
+                                          </span>
+                                      ) : item.status === 'pending' ? (
+                                          <span className="text-slate-500 flex items-center gap-1"><Clock size={12}/> Sırada</span>
+                                      ) : (
+                                          <span className="text-green-600 font-bold flex items-center gap-1"><Check size={12}/> Gönderildi</span>
+                                      )}
+                                  </td>
+                                  <td className="px-6 py-3 text-slate-500 text-xs">{item.reason}</td>
+                                  <td className="px-6 py-3">
+                                      {item.status === 'pending' && (
+                                          <button onClick={() => processQueueItem(item)} className="text-indigo-600 hover:text-indigo-800 text-xs font-bold border border-indigo-200 px-3 py-1 rounded hover:bg-indigo-50 transition-colors">Şimdi Gönder</button>
+                                      )}
+                                  </td>
+                              </tr>
+                          ))}
+                      </tbody>
+                  </table>
+                  {queue.length === 0 && <EmptyState icon={Mail} title="Kuyruk Boş" description="Şu an gönderim bekleyen mail yok. Ajan yeni leadler buldukça buraya ekleyecektir." />}
               </div>
-            </div>
           </div>
+      )}
+      
+      {activeTab === 'approval' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[600px]">
+              {/* List */}
+              <div className="lg:col-span-1 bg-white border border-slate-200 rounded-xl overflow-hidden flex flex-col">
+                  <div className="p-4 border-b border-slate-200 bg-slate-50">
+                      <h3 className="font-bold text-slate-800">Bekleyen Yanıtlar</h3>
+                      <p className="text-xs text-slate-500">{drafts.length} adet onay bekliyor</p>
+                  </div>
+                  <div className="flex-1 overflow-y-auto">
+                      {drafts.length > 0 ? drafts.map(draft => (
+                          <div 
+                            key={draft.id} 
+                            onClick={() => openDraft(draft)}
+                            className={`p-4 border-b cursor-pointer transition-colors hover:bg-indigo-50 ${selectedDraft?.id === draft.id ? 'bg-indigo-50 border-l-4 border-l-indigo-600' : ''}`}
+                          >
+                              <div className="flex justify-between items-start mb-1">
+                                  <span className="font-bold text-slate-800 text-sm">{draft.firma_adi}</span>
+                                  <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold">
+                                      {draft.draftResponse?.intent || 'Genel'}
+                                  </span>
+                              </div>
+                              <p className="text-xs text-slate-500 line-clamp-1">{draft.draftResponse?.subject}</p>
+                              <p className="text-[10px] text-slate-400 mt-2 flex items-center gap-1">
+                                  <Clock size={10}/> {new Date(draft.draftResponse?.created_at || '').toLocaleTimeString()}
+                              </p>
+                          </div>
+                      )) : (
+                          <div className="p-8 text-center text-slate-400">
+                              <CheckCircle size={32} className="mx-auto mb-2 opacity-20"/>
+                              <p className="text-sm">Onay bekleyen taslak yok.</p>
+                          </div>
+                      )}
+                  </div>
+              </div>
 
-          {/* Preview */}
-          <div className="lg:col-span-8">
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm h-full flex flex-col">
-               <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-xl">
-                  <div className="flex items-center gap-2 text-sm text-slate-600">
-                    <User size={16} />
-                    <span>Alıcı: <span className="font-medium text-slate-900">{selectedLead.yetkili_adi || 'Yetkili'}</span> ({selectedLead.email || 'email@yok.com'})</span>
-                  </div>
-                  <div className="flex gap-2">
-                    {emailContent.reasoning.map((reason, idx) => (
-                      <span key={idx} className="text-xs font-medium px-2 py-1 bg-indigo-100 text-indigo-700 rounded-md border border-indigo-200">
-                        {reason}
-                      </span>
-                    ))}
-                  </div>
-               </div>
-               
-               <div className="p-8 flex-1">
-                  <div className="mb-6 space-y-2">
-                    <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Konu</div>
-                    <div className="text-lg font-medium text-slate-900 border-b border-slate-100 pb-2">
-                      {emailContent.subject}
-                    </div>
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">İçerik</div>
-                    <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-line font-mono bg-slate-50 p-6 rounded-lg border border-slate-100">
-                      {emailContent.body}
-                    </div>
-                  </div>
-               </div>
+              {/* Editor */}
+              <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl overflow-hidden flex flex-col">
+                  {selectedDraft ? (
+                      <>
+                          <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
+                              <div className="flex items-center gap-3">
+                                  <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center font-bold">
+                                      {selectedDraft.firma_adi.charAt(0)}
+                                  </div>
+                                  <div>
+                                      <h3 className="font-bold text-slate-900">{selectedDraft.firma_adi}</h3>
+                                      <p className="text-xs text-slate-500">{selectedDraft.email}</p>
+                                  </div>
+                              </div>
+                              <div className="flex gap-2">
+                                  <button onClick={handleDiscardDraft} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Sil">
+                                      <Trash2 size={18} />
+                                  </button>
+                              </div>
+                          </div>
+                          
+                          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                              {/* Context Box */}
+                              <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm text-slate-600">
+                                  <h4 className="text-xs font-bold text-slate-400 uppercase mb-2 flex items-center gap-1">
+                                      <MessageSquare size={12}/> Bağlam / Son Mesajlar
+                                  </h4>
+                                  <p className="whitespace-pre-wrap italic">
+                                      {selectedDraft.notlar || "Geçmiş mesaj kaydı bulunamadı."}
+                                  </p>
+                              </div>
 
-               <div className="p-4 border-t border-slate-100 bg-slate-50 rounded-b-xl flex justify-end gap-3">
-                  <span className={`text-sm font-medium transition-all ${sendFeedback ? 'opacity-100 text-green-600' : 'opacity-0'}`}>
-                      {sendFeedback}
-                  </span>
-                  <button className="px-4 py-2 text-sm text-slate-600 font-medium hover:text-slate-900">Düzenle</button>
+                              <div className="space-y-4">
+                                  <div>
+                                      <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Konu</label>
+                                      <input 
+                                          value={draftSubject} 
+                                          onChange={(e) => setDraftSubject(e.target.value)}
+                                          className="w-full p-2 border border-slate-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                                      />
+                                  </div>
+                                  <div>
+                                      <label className="text-xs font-bold text-slate-500 uppercase block mb-1">İçerik</label>
+                                      <textarea 
+                                          value={draftBody} 
+                                          onChange={(e) => setDraftBody(e.target.value)}
+                                          className="w-full h-48 p-3 border border-slate-300 rounded-lg text-sm leading-relaxed focus:ring-2 focus:ring-indigo-500 outline-none resize-none"
+                                      />
+                                  </div>
+                              </div>
+                          </div>
+
+                          <div className="p-4 border-t border-slate-200 bg-slate-50 flex justify-end">
+                              <button 
+                                  onClick={handleApproveSend}
+                                  disabled={isSendingDraft}
+                                  className="flex items-center gap-2 px-6 py-2 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-70"
+                              >
+                                  {isSendingDraft ? <Loader2 size={18} className="animate-spin"/> : <Send size={18}/>}
+                                  {isSendingDraft ? 'Gönderiliyor...' : 'Onayla ve Gönder'}
+                              </button>
+                          </div>
+                      </>
+                  ) : (
+                      <div className="flex flex-col items-center justify-center h-full text-slate-400">
+                          <MousePointerClick size={48} className="mb-4 opacity-20"/>
+                          <p>Düzenlemek için soldan bir taslak seçin.</p>
+                      </div>
+                  )}
+              </div>
+          </div>
+      )}
+
+      {activeTab === 'templates' && (
+          <div className="space-y-6">
+              <div className="flex justify-between items-center">
+                  <div>
+                      <h3 className="text-lg font-bold text-slate-800">E-Posta Şablonları</h3>
+                      <p className="text-sm text-slate-500">Ajanın kullandığı iletişim senaryoları.</p>
+                  </div>
                   <button 
-                    onClick={handleTestSend}
-                    className="px-4 py-2 text-sm bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 shadow-sm flex items-center gap-2"
+                    onClick={() => { setEditingTemplate({}); setIsTemplateModalOpen(true); }}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
                   >
-                    <Send size={16} />
-                    Örnek Gönder
+                      <Plus size={16} /> Yeni Şablon
                   </button>
-               </div>
-            </div>
-          </div>
-       </div>
+              </div>
 
-      {/* Queue Table */}
-      <div>
-        <h3 className="text-lg font-semibold text-slate-900 mb-4">Gönderim Kuyruğu</h3>
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-50 border-b border-slate-200 text-slate-500">
-              <tr>
-                <th className="px-6 py-3 font-medium">Firma</th>
-                <th className="px-6 py-3 font-medium">Şablon</th>
-                <th className="px-6 py-3 font-medium">Planlanan Zaman</th>
-                <th className="px-6 py-3 font-medium">Durum</th>
-                <th className="px-6 py-3 text-right">İşlem</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {queue.length > 0 ? queue.map((item) => (
-                <tr key={item.id} className="hover:bg-slate-50">
-                  <td className="px-6 py-3 font-medium text-slate-900">{item.firm}</td>
-                  <td className="px-6 py-3 text-slate-600">{item.template}</td>
-                  <td className="px-6 py-3 text-slate-600">{item.time}</td>
-                  <td className="px-6 py-3">
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${
-                       !isRunning ? 'bg-slate-100 text-slate-500' : 'bg-amber-100 text-amber-700'
-                    }`}>
-                      {!isRunning ? 'Duraklatıldı' : 'Bekliyor'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-3 text-right">
-                    <button 
-                        onClick={() => handleRemoveFromQueue(item.id)}
-                        className="text-red-600 hover:underline"
-                    >
-                        İptal
-                    </button>
-                  </td>
-                </tr>
-              )) : (
-                  <tr>
-                      <td colSpan={5} className="px-6 py-8 text-center text-slate-500 italic">Kuyrukta bekleyen mail yok.</td>
-                  </tr>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {templates.map(tpl => {
+                      const successRate = tpl.useCount > 0 ? Math.round((tpl.successCount / tpl.useCount) * 100) : 0;
+                      return (
+                          <div key={tpl.id} className="bg-white border border-slate-200 rounded-xl p-5 hover:shadow-md transition-shadow group relative">
+                              <div className="flex justify-between items-start mb-3">
+                                  <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${
+                                      tpl.type === 'intro' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'
+                                  }`}>
+                                      {tpl.type === 'intro' ? 'Tanışma' : 'Takip'}
+                                  </span>
+                                  <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
+                                      <button onClick={() => { setEditingTemplate(tpl); setIsTemplateModalOpen(true); }} className="text-slate-400 hover:text-indigo-600"><Edit2 size={14}/></button>
+                                      <button onClick={() => handleDeleteTemplate(tpl.id)} className="text-slate-400 hover:text-red-600"><Trash2 size={14}/></button>
+                                  </div>
+                              </div>
+                              
+                              <h4 className="font-bold text-slate-800 mb-2 truncate" title={tpl.name}>{tpl.name}</h4>
+                              <p className="text-xs text-slate-500 mb-4 line-clamp-2 italic">"{tpl.subject}"</p>
+                              
+                              <div className="flex items-center justify-between text-xs border-t border-slate-100 pt-3">
+                                  <div className="flex items-center gap-1 text-slate-500">
+                                      <Send size={12}/> {tpl.useCount} Gönderim
+                                  </div>
+                                  <div className={`flex items-center gap-1 font-bold ${
+                                      successRate > 20 ? 'text-green-600' : successRate > 10 ? 'text-yellow-600' : 'text-slate-400'
+                                  }`}>
+                                      <TrendingUp size={12}/> %{successRate} Başarı
+                                  </div>
+                              </div>
+                          </div>
+                      );
+                  })}
+              </div>
+          </div>
+      )}
+      
+      {activeTab === 'lab' && (
+          <div className="space-y-8">
+              <div className="bg-indigo-900 rounded-2xl p-8 text-white shadow-xl relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500 opacity-20 rounded-full blur-3xl -mr-16 -mt-16"></div>
+                  <div className="relative z-10 flex flex-col md:flex-row justify-between items-center gap-6">
+                      <div>
+                          <h3 className="text-2xl font-bold flex items-center gap-2 mb-2">
+                              <TestTube className="text-pink-400" /> A/B Test Laboratuvarı
+                          </h3>
+                          <p className="text-indigo-200 text-sm max-w-lg">
+                              Mevcut şablonlarınızı yapay zeka ile yarıştırın. AI, açılma oranını artıracak 2 alternatif varyasyon üretir ve en iyisini seçmenizi sağlar.
+                          </p>
+                      </div>
+                      <div className="flex gap-4 items-center bg-white/10 p-2 rounded-xl backdrop-blur-sm">
+                          <select 
+                              value={selectedTemplateId} 
+                              onChange={(e) => { setSelectedTemplateId(e.target.value); setAbVariants([]); }}
+                              className="bg-transparent border-none text-white font-medium outline-none text-sm p-2 w-48"
+                          >
+                              {templates.map(t => <option key={t.id} value={t.id} className="text-slate-900">{t.name}</option>)}
+                          </select>
+                          <button 
+                              onClick={handleGenerateVariants} 
+                              disabled={isGeneratingVariants || !selectedTemplateId}
+                              className="px-4 py-2 bg-pink-600 hover:bg-pink-700 text-white rounded-lg font-bold text-sm transition-all flex items-center gap-2 shadow-lg disabled:opacity-50"
+                          >
+                              {isGeneratingVariants ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
+                              Varyasyon Üret
+                          </button>
+                      </div>
+                  </div>
+              </div>
+
+              {activeTemplate && abVariants.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      {/* ORIGINAL */}
+                      <div className="bg-white border-2 border-slate-200 rounded-xl p-6 relative opacity-70 hover:opacity-100 transition-opacity">
+                          <div className="absolute -top-3 left-6 bg-slate-200 text-slate-600 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
+                              Mevcut (Orijinal)
+                          </div>
+                          <div className="mt-4 space-y-4">
+                              <div>
+                                  <label className="text-xs font-bold text-slate-400 uppercase">Konu</label>
+                                  <p className="font-medium text-slate-800">{activeTemplate.subject}</p>
+                              </div>
+                              <div className="h-32 overflow-y-auto text-xs text-slate-600 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                  {activeTemplate.body}
+                              </div>
+                              <div className="pt-4 border-t border-slate-100 flex justify-center">
+                                  <span className="text-xs text-slate-400">Referans</span>
+                              </div>
+                          </div>
+                      </div>
+
+                      {/* VARIANTS */}
+                      {abVariants.map((variant, idx) => (
+                          <div key={variant.id} className={`bg-white border-2 rounded-xl p-6 relative shadow-lg transform hover:-translate-y-1 transition-all ${
+                              idx === 0 ? 'border-blue-200 ring-1 ring-blue-100' : 'border-purple-200 ring-1 ring-purple-100'
+                          }`}>
+                              <div className={`absolute -top-3 left-6 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider text-white ${
+                                  idx === 0 ? 'bg-blue-500' : 'bg-purple-500'
+                              }`}>
+                                  Varyasyon {idx === 0 ? 'A' : 'B'}
+                              </div>
+                              
+                              <div className="mt-4 space-y-4">
+                                  <div>
+                                      <label className="text-xs font-bold text-slate-400 uppercase">Konu</label>
+                                      <p className="font-medium text-slate-800">{variant.subject}</p>
+                                  </div>
+                                  <div className="h-32 overflow-y-auto text-xs text-slate-600 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                      {variant.body}
+                                  </div>
+                                  
+                                  {/* AI Score */}
+                                  <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                                      <div className="flex justify-between items-center mb-1">
+                                          <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                                              <BrainCircuit size={12}/> AI Skoru
+                                          </span>
+                                          <span className="text-sm font-bold text-green-600">%{variant.predictedOpenRate}</span>
+                                      </div>
+                                      <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
+                                          <div className="bg-green-500 h-full rounded-full" style={{ width: `${variant.predictedOpenRate}%` }}></div>
+                                      </div>
+                                      <p className="text-[10px] text-slate-500 mt-2 leading-tight italic">
+                                          "{variant.reasoning}"
+                                      </p>
+                                  </div>
+
+                                  <button 
+                                      onClick={() => handleApplyVariant(variant)}
+                                      className={`w-full py-2 rounded-lg font-bold text-sm text-white flex items-center justify-center gap-2 transition-colors ${
+                                          idx === 0 ? 'bg-blue-600 hover:bg-blue-700' : 'bg-purple-600 hover:bg-purple-700'
+                                      }`}
+                                  >
+                                      <Check size={16} /> Bu Varyasyonu Seç
+                                  </button>
+                              </div>
+                          </div>
+                      ))}
+                  </div>
+              ) : (
+                  <div className="flex flex-col items-center justify-center py-20 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                      <TestTube size={48} className="text-slate-300 mb-4" />
+                      <p className="text-slate-500 font-medium">Bir şablon seçin ve "Varyasyon Üret" butonuna basın.</p>
+                  </div>
               )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+          </div>
+      )}
+
+      {/* TEMPLATE EDIT MODAL */}
+      {isTemplateModalOpen && (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden animate-fade-in">
+                  <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                      <h3 className="font-bold text-slate-900">{editingTemplate?.id ? 'Şablon Düzenle' : 'Yeni Şablon'}</h3>
+                      <button onClick={() => setIsTemplateModalOpen(false)}><X size={20} className="text-slate-400 hover:text-slate-600"/></button>
+                  </div>
+                  <div className="p-6 space-y-4">
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Şablon Adı</label>
+                          <input 
+                              value={editingTemplate?.name || ''} 
+                              onChange={e => setEditingTemplate(prev => ({ ...prev, name: e.target.value }))}
+                              className="w-full p-2 border border-slate-300 rounded-lg text-sm"
+                              placeholder="Örn: Restoran Tanışma v2"
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Tip</label>
+                          <select 
+                              value={editingTemplate?.type || 'intro'}
+                              onChange={e => setEditingTemplate(prev => ({ ...prev, type: e.target.value as any }))}
+                              className="w-full p-2 border border-slate-300 rounded-lg text-sm"
+                          >
+                              <option value="intro">Tanışma (Intro)</option>
+                              <option value="followup1">Takip 1</option>
+                              <option value="followup2">Takip 2</option>
+                          </select>
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">E-Posta Konusu</label>
+                          <input 
+                              value={editingTemplate?.subject || ''} 
+                              onChange={e => setEditingTemplate(prev => ({ ...prev, subject: e.target.value }))}
+                              className="w-full p-2 border border-slate-300 rounded-lg text-sm"
+                              placeholder="Müşterinin göreceği konu"
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">İçerik</label>
+                          <textarea 
+                              value={editingTemplate?.body || ''} 
+                              onChange={e => setEditingTemplate(prev => ({ ...prev, body: e.target.value }))}
+                              rows={6}
+                              className="w-full p-2 border border-slate-300 rounded-lg text-sm leading-relaxed resize-none"
+                              placeholder="{firma_adi}, {yetkili} gibi değişkenler kullanabilirsiniz."
+                          />
+                          <p className="text-[10px] text-slate-400 mt-1">Değişkenler: {'{firma_adi}'}, {'{yetkili}'}, {'{ilce}'}</p>
+                      </div>
+                  </div>
+                  <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+                      <button onClick={() => setIsTemplateModalOpen(false)} className="px-4 py-2 text-slate-600 font-medium text-sm hover:bg-slate-200 rounded-lg">İptal</button>
+                      <button onClick={handleSaveTemplate} className="px-4 py-2 bg-indigo-600 text-white font-medium text-sm hover:bg-indigo-700 rounded-lg">Kaydet</button>
+                  </div>
+              </div>
+          </div>
+      )}
     </div>
   );
 };

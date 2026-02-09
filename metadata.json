@@ -1,5 +1,8 @@
 {
   "name": "Istanbul Sales Agent Dashboard",
   "description": "A comprehensive dashboard for managing the AI Sales Agent targeting new businesses in Istanbul. Includes lead management, email automation monitoring, and an AI assistant interface.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "microphone",
+    "geolocation"
+  ]
 }
