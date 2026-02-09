@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { BookOpen, Zap, Target, Mail, Activity, PlayCircle, ShieldCheck, HelpCircle, CheckCircle, Calendar } from 'lucide-react';
 
@@ -33,7 +34,7 @@ const Guide: React.FC = () => {
               <div className="p-4 bg-slate-50 rounded-lg border border-slate-100">
                   <div className="w-8 h-8 bg-indigo-600 text-white rounded-full flex items-center justify-center font-bold mb-3">3</div>
                   <h4 className="font-semibold text-slate-800 mb-2">Onaylayın</h4>
-                  <p className="text-sm text-slate-600">Mail Otomasyonu > Yanıt Onayı sekmesine düşen taslakları kontrol edip gönderin.</p>
+                  <p className="text-sm text-slate-600">Mail Otomasyonu &gt; Yanıt Onayı sekmesine düşen taslakları kontrol edip gönderin.</p>
               </div>
           </div>
       </div>
@@ -120,7 +121,7 @@ const Guide: React.FC = () => {
                       <span className="text-slate-400 group-open:rotate-180 transition-transform">▼</span>
                   </summary>
                   <p className="text-sm text-slate-600 mt-2">
-                      Ayarlar > Persona sekmesinden adınızı, unvanınızı ve şirket adınızı girerseniz, Yapay Zeka mail atarken ve teklif hazırlarken bu bilgileri kullanarak sizin ağzınızdan konuşur.
+                      Ayarlar &gt; Persona sekmesinden adınızı, unvanınızı ve şirket adınızı girerseniz, Yapay Zeka mail atarken ve teklif hazırlarken bu bilgileri kullanarak sizin ağzınızdan konuşur.
                   </p>
               </details>
 
