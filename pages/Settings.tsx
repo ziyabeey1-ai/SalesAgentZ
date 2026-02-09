@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Save, Key, Sheet, Smartphone, ShieldCheck, Mail, Check, Loader2, LogIn, ExternalLink, Battery, AlertTriangle, UserCircle, Briefcase, Globe, Cloud, UploadCloud, Database, Calendar, MessageCircle, Package, Plus, Trash2, Wand2, Zap, DollarSign, Calculator, TrendingUp, Image as ImageIcon, X } from 'lucide-react';
+import { Save, Key, Sheet, Smartphone, ShieldCheck, Mail, Check, Loader2, LogIn, ExternalLink, Battery, AlertTriangle, UserCircle, Briefcase, Globe, Cloud, UploadCloud, Database, Calendar, MessageCircle, Package, Plus, Trash2, Wand2, Zap, DollarSign, Calculator, TrendingUp, Image as ImageIcon, X, Bot, Server } from 'lucide-react';
 import { sheetsService } from '../services/googleSheetsService';
 import { firebaseService } from '../services/firebaseService';
 import { storage } from '../services/storage';
@@ -11,7 +11,8 @@ import { api } from '../services/api';
 const Settings: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'general' | 'persona' | 'pricing' | 'cloud'>('general');
   const [isSaving, setIsSaving] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'success'>('idle');
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [errorMessage, setErrorMessage] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   
@@ -30,9 +31,11 @@ const Settings: React.FC = () => {
   
   const [usage, setUsage] = useState(storage.getUsage());
 
+  // Initialize state with specific keys, falling back to generic 'apiKey' if specific ones aren't found (migration)
   const [settings, setSettings] = useState({
       clientId: localStorage.getItem('clientId') || '',
-      apiKey: localStorage.getItem('apiKey') || '',
+      geminiApiKey: localStorage.getItem('geminiApiKey') || localStorage.getItem('apiKey') || '',
+      googleApiKey: localStorage.getItem('googleApiKey') || localStorage.getItem('apiKey') || '',
       sheetId: localStorage.getItem('sheetId') || '',
       waToken: localStorage.getItem('waToken') || '',
       waPhoneId: localStorage.getItem('waPhoneId') || '',
@@ -64,7 +67,11 @@ const Settings: React.FC = () => {
   }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-      setSettings({ ...settings, [e.target.name]: e.target.value });
+      // API Key ve Client ID gibi alanlarda boşlukları temizle
+      const value = (e.target.name.includes('Key') || e.target.name === 'clientId' || e.target.name === 'sheetId') 
+          ? e.target.value.trim() 
+          : e.target.value;
+      setSettings({ ...settings, [e.target.name]: value });
   };
 
   const handleProfileChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -113,11 +120,23 @@ const Settings: React.FC = () => {
 
   const handleSave = async () => {
     setIsSaving(true);
+    setSaveStatus('idle');
+    setErrorMessage('');
     
     if (activeTab === 'general') {
-        localStorage.setItem('clientId', settings.clientId);
-        localStorage.setItem('apiKey', settings.apiKey);
-        localStorage.setItem('sheetId', settings.sheetId);
+        const cleanGeminiKey = settings.geminiApiKey.trim();
+        const cleanGoogleKey = settings.googleApiKey.trim();
+        const cleanClientId = settings.clientId.trim();
+
+        // Save distinct keys
+        localStorage.setItem('geminiApiKey', cleanGeminiKey);
+        localStorage.setItem('googleApiKey', cleanGoogleKey);
+        
+        // Update legacy key for fallback compatibility
+        localStorage.setItem('apiKey', cleanGeminiKey); 
+
+        localStorage.setItem('clientId', cleanClientId);
+        localStorage.setItem('sheetId', settings.sheetId.trim());
         localStorage.setItem('waToken', settings.waToken);
         localStorage.setItem('waPhoneId', settings.waPhoneId);
         localStorage.setItem('adminPhone', settings.adminPhone);
@@ -126,10 +145,22 @@ const Settings: React.FC = () => {
         sheetsService.setSpreadsheetId(settings.sheetId);
 
         try {
-            await sheetsService.initialize(settings.apiKey, settings.clientId);
+            // Eğer Client ID varsa initialize et
+            if (cleanClientId && cleanGoogleKey) {
+                await sheetsService.initialize(cleanGoogleKey, cleanClientId);
+            }
             setSaveStatus('success');
-        } catch (e) {
+        } catch (e: any) {
             console.error(e);
+            setSaveStatus('error');
+            // Hata mesajını ayrıştır
+            let msg = e.message;
+            if (msg.includes("API key not valid")) {
+                msg = "Google Cloud API Key geçersiz. Lütfen Google Cloud Console'dan kopyaladığınız anahtarı kontrol edin.";
+            } else if (msg.includes("origin_mismatch")) {
+                msg = "Yetkili Kaynak Hatası (Origin Mismatch). Client ID ayarlarında 'Authorized JavaScript origins' kısmına 'http://localhost:3000' eklediğinizden emin olun.";
+            }
+            setErrorMessage(msg || "Bağlantı hatası. API Key veya Client ID geçersiz.");
         }
     } else if (activeTab === 'cloud') {
         try {
@@ -147,19 +178,21 @@ const Settings: React.FC = () => {
         setSaveStatus('success');
     }
     
-    setTimeout(() => setSaveStatus('idle'), 3000);
+    setTimeout(() => {
+        if (saveStatus !== 'error') setSaveStatus('idle');
+    }, 3000);
     setIsSaving(false);
   };
 
   const handleGoogleLogin = async () => {
       setAuthLoading(true);
       try {
-          await sheetsService.initialize(settings.apiKey, settings.clientId);
+          await sheetsService.initialize(settings.googleApiKey.trim(), settings.clientId.trim());
           await sheetsService.handleAuthClick();
           setIsAuthenticated(true);
-      } catch (error) {
+      } catch (error: any) {
           console.error("Login failed", error);
-          alert("Giriş başarısız. Client ID ve API Key'in doğru olduğundan emin olun.");
+          alert(`Giriş başarısız: ${error.message || JSON.stringify(error)}`);
       } finally {
           setAuthLoading(false);
       }
@@ -231,6 +264,7 @@ const Settings: React.FC = () => {
 
       {activeTab === 'pricing' ? (
           <div className="space-y-8">
+              {/* Pricing Content (No changes needed here) */}
               <div className="bg-gradient-to-br from-indigo-900 to-purple-900 rounded-2xl p-8 text-white shadow-xl relative overflow-hidden">
                   <div className="absolute top-0 right-0 w-64 h-64 bg-white opacity-5 rounded-full -mr-16 -mt-16"></div>
                   <div className="absolute bottom-0 left-0 w-48 h-48 bg-purple-500 opacity-20 blur-3xl -ml-10 -mb-10"></div>
@@ -294,6 +328,7 @@ const Settings: React.FC = () => {
           </div>
       ) : activeTab === 'cloud' ? (
           <div className="space-y-6">
+              {/* Cloud Content */}
               <div className="bg-white border border-indigo-200 rounded-xl shadow-sm p-6 bg-gradient-to-r from-white to-orange-50">
                   <div className="flex items-start gap-4">
                       <div className="p-3 bg-orange-100 rounded-full text-orange-600"><Cloud size={32} /></div>
@@ -324,6 +359,7 @@ const Settings: React.FC = () => {
           </div>
       ) : activeTab === 'persona' ? (
           <div className="space-y-6">
+              {/* Persona Content */}
               <div className="bg-white border border-indigo-200 rounded-xl shadow-sm p-6 bg-gradient-to-r from-white to-indigo-50">
                   <div className="flex items-start gap-4">
                       <div className="p-3 bg-indigo-100 rounded-full text-indigo-600"><UserCircle size={32} /></div>
@@ -392,12 +428,102 @@ const Settings: React.FC = () => {
                           </div>
                       </div>
                   </div>
-                  <p className="text-xs text-slate-400 mt-2">Bu imza, gönderdiğiniz tüm maillerin altına otomatik olarak eklenecektir.</p>
               </div>
           </div>
       ) : (
           // GENERAL TAB
           <div className="space-y-8">
+            
+            {/* GEMINI API KEY (SEPARATE FIELD) */}
+            <div className="bg-white border border-indigo-200 rounded-xl shadow-sm p-6 bg-gradient-to-r from-indigo-50 to-white">
+                <div className="flex items-start gap-4">
+                    <div className="p-2 bg-indigo-100 rounded-lg text-indigo-600 mt-1"><Bot className="w-6 h-6" /></div>
+                    <div className="flex-1">
+                        <h3 className="text-lg font-bold text-slate-900">1. Yapay Zeka (Gemini)</h3>
+                        <p className="text-sm text-slate-600 mb-4">Ajanın zekası için gerekli AI Studio anahtarı.</p>
+                        
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-slate-700">Gemini API Key (AI Studio)</label>
+                            <div className="relative">
+                                <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                                <input 
+                                    type="password" 
+                                    name="geminiApiKey" 
+                                    value={settings.geminiApiKey} 
+                                    onChange={handleChange} 
+                                    placeholder="AIzaSy... (Gemini Anahtarı)" 
+                                    className="w-full pl-10 pr-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-mono" 
+                                />
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1">
+                                Bu anahtar <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-indigo-600 hover:underline">Google AI Studio</a>'dan alınır. Sadece AI işlemleri (sohbet, analiz, görsel) için kullanılır.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* GOOGLE CLOUD INTEGRATION */}
+            <div className={`bg-white border border-slate-200 rounded-xl shadow-sm p-6 ${isAuthenticated ? 'border-green-200 bg-green-50/30' : ''}`}>
+                <div className="flex items-start gap-4">
+                    <div className="p-2 bg-blue-50 rounded-lg text-blue-600 mt-1"><Server className="w-6 h-6" /></div>
+                    <div className="flex-1">
+                        <div className="flex items-center justify-between mb-4">
+                            <div>
+                                <h3 className="text-lg font-bold text-slate-900">2. Google Cloud Entegrasyonu</h3>
+                                <p className="text-sm text-slate-500">Gmail, Takvim ve Sheets entegrasyonu için (Opsiyonel).</p>
+                            </div>
+                            {isAuthenticated && <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1"><Check size={12}/> Bağlı</span>}
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-1">
+                                <label className="text-sm font-medium text-slate-700">Google Cloud API Key</label>
+                                <input 
+                                    type="password" 
+                                    name="googleApiKey" 
+                                    value={settings.googleApiKey} 
+                                    onChange={handleChange} 
+                                    placeholder="AIzaSy... (Cloud Anahtarı)" 
+                                    className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none font-mono" 
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-sm font-medium text-slate-700">Client ID (OAuth 2.0)</label>
+                                <input 
+                                    type="text" 
+                                    name="clientId" 
+                                    value={settings.clientId} 
+                                    onChange={handleChange} 
+                                    placeholder="....apps.googleusercontent.com" 
+                                    className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none font-mono" 
+                                />
+                            </div>
+                        </div>
+                        
+                        <div className="mt-4">
+                            {!isAuthenticated ? (
+                                <button onClick={handleGoogleLogin} disabled={authLoading || !settings.clientId} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg font-medium hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">
+                                    {authLoading ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />} Google Hesabını Bağla
+                                </button>
+                            ) : (
+                                <p className="text-xs text-green-600 font-medium">Hesabınız başarıyla bağlandı. Tüm servisler aktif.</p>
+                            )}
+                        </div>
+
+                        {errorMessage && (
+                            <div className="mt-4 p-3 bg-red-50 border border-red-100 rounded-lg text-sm text-red-700 flex items-start gap-2">
+                                <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+                                <div className="break-all">{errorMessage}</div>
+                            </div>
+                        )}
+                        <p className="text-xs text-slate-400 mt-2">
+                            Not: Cloud API Key ve Client ID, <a href="https://console.cloud.google.com/apis/credentials" target="_blank" className="text-blue-600 hover:underline">Google Cloud Console</a>'dan alınır.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
             {/* COST GUARD */}
             <div className="bg-white border border-orange-200 rounded-xl shadow-sm p-6 bg-gradient-to-r from-white to-orange-50">
                 <div className="flex items-start gap-4">
@@ -405,18 +531,12 @@ const Settings: React.FC = () => {
                     <div className="flex-1"><h3 className="text-lg font-bold text-slate-900">Maliyet Koruması</h3><p className="text-sm text-slate-600 mb-4">Günlük API işlem sınırı.</p><div className="flex gap-4 items-center"><input type="range" min="10" max="500" step="10" name="dailyLimit" value={settings.dailyLimit} onChange={(e) => setSettings({...settings, dailyLimit: Number(e.target.value)})} className="flex-1 accent-orange-500 cursor-pointer"/><span className="font-bold text-slate-800">{settings.dailyLimit}</span></div></div>
                 </div>
             </div>
-            {/* Google Services */}
-            <div className={`border rounded-xl p-6 flex items-center justify-between ${isAuthenticated ? 'bg-green-50 border-green-200' : 'bg-white border-slate-200'}`}>
-                <div className="flex items-center gap-4"><div className={`p-3 rounded-full ${isAuthenticated ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>{isAuthenticated ? <Check size={24} /> : <Mail size={24} />}</div><div><h3 className="font-semibold text-slate-900">Google Workspace Bağlantısı</h3><p className="text-sm text-slate-500">{isAuthenticated ? 'Hesabınız bağlandı.' : 'Gmail gönderimi için gereklidir.'}</p></div></div>
-                {!isAuthenticated ? (<button onClick={handleGoogleLogin} disabled={authLoading || !settings.clientId} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed">{authLoading ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />} Google ile Bağlan</button>) : (<div className="flex items-center gap-2 text-green-700 font-medium px-4 py-2 bg-white rounded-lg border border-green-200"><Check size={16} /> Aktif</div>)}
-            </div>
-            {/* API KEYS Inputs */}
-            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6"><div className="flex items-start gap-4"><div className="p-2 bg-blue-50 rounded-lg text-blue-600 mt-1"><Key className="w-6 h-6" /></div><div className="flex-1"><h3 className="text-lg font-medium text-slate-900">Google Cloud Credentials</h3><div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4"><div className="space-y-1"><label className="text-sm font-medium text-slate-700">Client ID</label><input type="text" name="clientId" value={settings.clientId} onChange={handleChange} className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none" /></div><div className="space-y-1"><label className="text-sm font-medium text-slate-700">API Key</label><input type="password" name="apiKey" value={settings.apiKey} onChange={handleChange} className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none" /></div></div></div></div></div>
           </div>
       )}
 
       <div className="flex justify-end pt-4 gap-3 items-center sticky bottom-0 bg-slate-50 p-4 border-t border-slate-200 -mx-6 -mb-12">
         {saveStatus === 'success' && (<span className="text-green-600 flex items-center gap-2 text-sm font-medium animate-fade-in"><Check size={16} /> Kaydedildi</span>)}
+        {saveStatus === 'error' && (<span className="text-red-600 flex items-center gap-2 text-sm font-medium animate-fade-in"><X size={16} /> Hata Oluştu</span>)}
         <button onClick={handleSave} disabled={isSaving} className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-70 disabled:cursor-not-allowed">{isSaving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />} {isSaving ? 'Kaydediliyor...' : 'Kaydet'}</button>
       </div>
     </div>

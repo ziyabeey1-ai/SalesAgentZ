@@ -146,28 +146,21 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
 
         const text = result.text || '';
         
-        // Robust JSON extraction: Find the first '[' and the last ']'
-        const start = text.indexOf('[');
-        const end = text.lastIndexOf(']');
-        
         let data: any[] = [];
         
-        if (start !== -1 && end !== -1) {
-            const jsonStr = text.substring(start, end + 1);
-            try {
-                data = JSON.parse(jsonStr);
-            } catch (e) {
-                console.error("JSON Parse Error", e);
-                // Try aggressive cleanup if clean parse fails
+        // Robust JSON extraction
+        try {
+            data = JSON.parse(text);
+        } catch (e) {
+            // Regex extraction fallback
+            const match = text.match(/\[[\s\S]*\]/);
+            if (match) {
                 try {
-                    const cleanStr = jsonStr.replace(/\\n/g, '').replace(/\\/g, '');
-                    data = JSON.parse(cleanStr);
+                    data = JSON.parse(match[0]);
                 } catch (e2) {
-                    console.error("Aggressive Parse Error", e2);
+                    console.error("Advanced JSON Parse Error", e2);
                 }
             }
-        } else {
-            console.warn("No JSON array found in response");
         }
 
         if (Array.isArray(data) && data.length > 0) {

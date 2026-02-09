@@ -4,6 +4,8 @@ import { Lead, Task, ActionLog, Interaction, DashboardStats, CalendarEvent, Emai
 export class GoogleSheetsService {
   public isAuthenticated = false;
   private spreadsheetId = '';
+  private tokenClient: any;
+  private accessToken: string | null = null;
 
   constructor() {}
 
@@ -12,45 +14,79 @@ export class GoogleSheetsService {
   }
 
   public async initialize(apiKey: string, clientId: string): Promise<void> {
-      if (!window.gapi) {
-          console.warn("Google API script not loaded");
-          return;
-      }
+      if (!window.gapi) throw new Error("Google API script not loaded");
+      if (!window.google) throw new Error("Google Identity Services script not loaded");
+
       try {
+          // 1. Load GAPI Client (for API requests)
           await new Promise<void>((resolve, reject) => {
-              window.gapi.load('client:auth2', {
-                  callback: resolve,
-                  onerror: reject
-              });
+              window.gapi.load('client', { callback: resolve, onerror: reject });
           });
-          
+
+          // 2. Initialize GAPI Client (Only API Key & Discovery Docs)
+          // NOT: Yeni sistemde clientId ve scope buraya verilmez!
           await window.gapi.client.init({
               apiKey: apiKey,
-              clientId: clientId,
               discoveryDocs: ["https://sheets.googleapis.com/$discovery/rest?version=v4", "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest", "https://gmail.googleapis.com/$discovery/rest?version=v1"],
-              scope: "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/gmail.send",
           });
 
-          // Listen for sign-in state changes.
-          window.gapi.auth2.getAuthInstance().isSignedIn.listen(this.updateSigninStatus.bind(this));
+          // 3. Initialize GIS Token Client (for Authentication)
+          this.tokenClient = window.google.accounts.oauth2.initTokenClient({
+              client_id: clientId,
+              scope: "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/gmail.send",
+              callback: (tokenResponse: any) => {
+                  if (tokenResponse && tokenResponse.access_token) {
+                      this.accessToken = tokenResponse.access_token;
+                      this.isAuthenticated = true;
+                      // API istekleri için token'ı gapi client'a ata
+                      if (window.gapi.client) {
+                          window.gapi.client.setToken(tokenResponse);
+                      }
+                  }
+              },
+          });
 
-          // Handle the initial sign-in state.
-          this.updateSigninStatus(window.gapi.auth2.getAuthInstance().isSignedIn.get());
-      } catch (error) {
-          console.error("GAPI Init Error", error);
+      } catch (error: any) {
+          console.error("GAPI/GIS Init Error:", error);
+          throw new Error(error.message || JSON.stringify(error));
       }
-  }
-
-  private updateSigninStatus(isSignedIn: boolean) {
-      this.isAuthenticated = isSignedIn;
   }
 
   public async handleAuthClick(): Promise<void> {
-      if (window.gapi) await window.gapi.auth2.getAuthInstance().signIn();
+      if (!this.tokenClient) throw new Error("Lütfen önce API Key ve Client ID girip Kaydet'e basın.");
+      
+      return new Promise((resolve, reject) => {
+          try {
+              // Promise tabanlı yönetim için callback'i override ediyoruz
+              this.tokenClient.callback = (resp: any) => {
+                  if (resp.error) {
+                      reject(resp);
+                  } else {
+                      this.accessToken = resp.access_token;
+                      this.isAuthenticated = true;
+                      if (window.gapi.client) {
+                          window.gapi.client.setToken(resp);
+                      }
+                      resolve();
+                  }
+              };
+              // Popup aç
+              this.tokenClient.requestAccessToken({ prompt: 'consent' });
+          } catch (e) {
+              reject(e);
+          }
+      });
   }
 
   public async handleSignoutClick(): Promise<void> {
-      if (window.gapi) await window.gapi.auth2.getAuthInstance().signOut();
+      if (this.accessToken && window.google) {
+          window.google.accounts.oauth2.revoke(this.accessToken, () => {
+              this.accessToken = null;
+              this.isAuthenticated = false;
+              if (window.gapi.client) window.gapi.client.setToken(null);
+              console.log('Access token revoked');
+          });
+      }
   }
 
   // Leads

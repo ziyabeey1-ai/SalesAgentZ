@@ -37,6 +37,22 @@ const AgentContext = createContext<AgentContextType | undefined>(undefined);
 // Helper to get API Key
 const getApiKey = () => process.env.API_KEY || localStorage.getItem('apiKey') || '';
 
+// Reusable JSON Parser
+const parseGeminiJson = (text: string) => {
+    try {
+        return JSON.parse(text);
+    } catch (e) {
+        let clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        try {
+            return JSON.parse(clean);
+        } catch (e2) {
+            const match = clean.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+            if (match) return JSON.parse(match[0]);
+            throw new Error("JSON parse failed");
+        }
+    }
+};
+
 export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
   const [isAgentRunning, setIsAgentRunning] = useState(false); 
   const [agentStatus, setAgentStatus] = useState<string>('Beklemede');
@@ -184,7 +200,7 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
         const prompt = `
             İstanbul ${districtToSearch} bölgesinde "${sectorToSearch}" sektöründe hizmet veren 2 adet YEREL ve BUTİK işletme bul.
             Zincir marketleri, hastaneleri, kurumsal firmaları ele. Sadece esnaf/KOBİ bul.
-            JSON: [{ "firma_adi": "...", "adres": "..." }]
+            JSON Array: [{ "firma_adi": "...", "adres": "..." }]
         `;
 
         const result = await ai.models.generateContent({
@@ -193,10 +209,7 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
             config: { tools: [{ googleSearch: {} }] }
         });
 
-        const text = result.text || '';
-        const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
-        let data: any[] = [];
-        try { data = JSON.parse(jsonStr); } catch (e) { console.error("JSON Parse Error", e); }
+        const data = parseGeminiJson(result.text || '[]');
 
         if (Array.isArray(data) && data.length > 0) {
             let addedCount = 0;
@@ -234,7 +247,7 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
         }
       } catch (e) { 
           console.error("Auto discovery failed", e);
-          addThought('error', 'Keşif işlemi sırasında hata oluştu.');
+          addThought('error', 'Keşif işlemi sırasında hata oluştu. (JSON formatı bozuk olabilir)');
       }
   };
 
@@ -262,7 +275,8 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
             contents: prompt,
             config: { tools: [{ googleSearch: {} }] }
           });
-          const data = JSON.parse(result.text?.replace(/```json/g, '').replace(/```/g, '').trim() || '{}');
+          
+          const data = parseGeminiJson(result.text || '{}');
           
           if (data.telefon || data.email) {
               const updatedLead = {
@@ -438,7 +452,7 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
               config: { responseMimeType: 'application/json' }
           });
 
-          const data = JSON.parse(result.text || '{}');
+          const data = parseGeminiJson(result.text || '{}');
 
           const updatedLead: Lead = {
               ...target,

@@ -13,7 +13,40 @@ const useSheets = () => {
     return sheetsService.isAuthenticated && localStorage.getItem('sheetId');
 };
 
-const getApiKey = () => process.env.API_KEY || localStorage.getItem('apiKey') || '';
+const getApiKey = () => {
+    // 1. Env (Development)
+    if (process.env.API_KEY) return process.env.API_KEY;
+    // 2. Explicit Gemini Key
+    const geminiKey = localStorage.getItem('geminiApiKey');
+    if (geminiKey) return geminiKey;
+    // 3. Fallback to generic 'apiKey' (Legacy)
+    return localStorage.getItem('apiKey') || '';
+};
+
+// --- ROBUST JSON PARSER ---
+const parseGeminiJson = (text: string) => {
+    try {
+        // 1. Try direct parse
+        return JSON.parse(text);
+    } catch (e) {
+        // 2. Extract from code blocks
+        let clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        try {
+            return JSON.parse(clean);
+        } catch (e2) {
+            // 3. Regex extraction (Find first [ or { and last ] or })
+            const match = clean.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+            if (match) {
+                try {
+                    return JSON.parse(match[0]);
+                } catch (e3) {
+                    throw new Error("JSON parse failed after regex extraction");
+                }
+            }
+            throw new Error("No valid JSON found in response");
+        }
+    }
+};
 
 export const api = {
   leads: {
@@ -152,7 +185,6 @@ export const api = {
 
   templates: {
       getAll: async (): Promise<EmailTemplate[]> => {
-          // Templates are currently local-only to keep it simple and fast
           return storage.getTemplates();
       },
       save: async (template: EmailTemplate) => {
@@ -165,15 +197,27 @@ export const api = {
           storage.deleteTemplate(id);
       },
       generateABVariants: async (template: EmailTemplate) => {
-          // AI Generation Placeholder
-          // In a real implementation, call Gemini here
-          return [];
+          const ai = new GoogleGenAI({ apiKey: getApiKey() });
+          const prompt = `
+            GÖREV: E-posta A/B testi için varyasyonlar üret.
+            MEVCUT ŞABLON:
+            Konu: ${template.subject}
+            Gövde: ${template.body}
+            
+            ÇIKTI (JSON Array): 2 adet farklı varyasyon. 
+            [{ "subject": "...", "body": "...", "predictedOpenRate": 0-100, "reasoning": "..." }]
+          `;
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: prompt,
+              config: { responseMimeType: 'application/json' }
+          });
+          return parseGeminiJson(response.text || '[]');
       }
   },
 
   reports: {
     getPerformanceData: async () => {
-        // Use local storage data to generate reports if offline
         const leads = useSheets() ? await sheetsService.getLeads() : storage.getLeads();
         const interactions = useSheets() ? await sheetsService.getInteractions() : storage.getInteractions();
 
@@ -187,7 +231,7 @@ export const api = {
             { name: 'Satış', value: leads.filter(l => l.lead_durumu === 'olumlu').length, fill: '#10b981' },
         ];
 
-        // 2. Weekly Trend (Calculated from interactions)
+        // 2. Weekly Trend
         const weeklyTrend = [];
         const today = new Date();
         for (let i = 6; i >= 0; i--) {
@@ -245,23 +289,14 @@ export const api = {
           // 2. Generate Script (Text)
           const scriptPrompt = `
             Aşağıdaki verilere dayanarak bir satış ajanı için 40-50 kelimelik, enerjik, motive edici ve Türkçe bir sabah brifingi metni yaz.
-            
-            Veriler:
-            - Günlük Hedef: %${stats.hedef_orani} tamamlandı.
-            - Sıcak Lead: ${hotLeads} adet.
-            - Acil Görev: ${urgentTasks} adet.
-            - Seri (Streak): ${streak} gün.
-            
-            Format:
-            Bir radyo sunucusu veya kişisel koç gibi konuş. İsmini kullanma, direkt konuya gir.
-            Örn: "Günaydın! Bugün harika gidiyorsun, hedefin %80'i cepte..."
+            Veriler: %${stats.hedef_orani} hedef, ${hotLeads} sıcak lead, ${urgentTasks} acil görev, ${streak} gün seri.
           `;
 
           const scriptResponse = await ai.models.generateContent({
-              model: 'gemini-2.0-flash-exp',
+              model: 'gemini-3-flash-preview', 
               contents: scriptPrompt,
           });
-          const scriptText = scriptResponse.text || "Günaydın, verilere ulaşamadım ama bugün harika bir gün olacak!";
+          const scriptText = scriptResponse.text || "Günaydın! Verileri alamadım ama harika bir gün olacak.";
 
           // 3. Generate Audio (TTS)
           const ttsResponse = await ai.models.generateContent({
@@ -271,7 +306,7 @@ export const api = {
                   responseModalities: [Modality.AUDIO],
                   speechConfig: {
                       voiceConfig: {
-                          prebuiltVoiceConfig: { voiceName: 'Kore' } // Kore, Fenrir, Puck, Charon
+                          prebuiltVoiceConfig: { voiceName: 'Kore' }
                       }
                   }
               }
@@ -280,7 +315,7 @@ export const api = {
           // 4. Play Audio
           const base64Audio = ttsResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
           if (base64Audio) {
-              const audioBuffer = await decodeAudioData(base64ToArrayBuffer(base64Audio), 24000); // 24k is standard for Gemini TTS
+              const audioBuffer = await decodeAudioData(base64ToArrayBuffer(base64Audio), 24000); 
               await playAudioBuffer(audioBuffer);
               return scriptText;
           }
@@ -295,37 +330,21 @@ export const api = {
 
           const prompt = `
             GÖREV: Bir satış eğitim simülasyonunu değerlendir.
-            
             SENARYO: ${scenario}
-            
-            DİYALOG GEÇMİŞİ:
-            ${transcript}
-            
-            DEĞERLENDİRME KRİTERLERİ:
-            1. Empati: Müşteriyi anladı mı?
-            2. İkna: İtirazları mantıklı karşıladı mı?
-            3. Profesyonellik: Tonu ve dili uygun muydu?
-            
-            ÇIKTI FORMATI (JSON):
-            {
-                "score": 0-100 arası bir puan,
-                "feedback": "Kısa, yapıcı bir geri bildirim paragrafı (Türkçe).",
-                "tips": ["Gelişim önerisi 1", "Gelişim önerisi 2"]
-            }
+            DİYALOG: ${transcript}
+            ÇIKTI (JSON): { "score": 0-100, "feedback": "...", "tips": ["..."] }
           `;
 
           const response = await ai.models.generateContent({
-              model: 'gemini-2.0-flash-exp',
+              model: 'gemini-2.0-flash-exp', // Using 2.0 exp for better reasoning fallback
               contents: prompt,
               config: { responseMimeType: 'application/json' }
           });
 
-          const data = JSON.parse(response.text || '{}');
+          const data = parseGeminiJson(response.text || '{}');
           
-          // Gamification Reward
           if (data.score && data.score >= 70) {
-              // Award heavy XP for passing training
-              gamificationService.recordAction('deal_won'); // Re-using deal_won trigger for 500xp simulation
+              gamificationService.recordAction('deal_won');
           }
 
           return data;
@@ -334,42 +353,125 @@ export const api = {
 
   strategy: {
       getInsights: async () => {
-          // AI Logic Placeholder
+          // Placeholder
           return [];
       }
   },
 
   competitors: {
       analyze: async (lead: Lead) => {
-          // AI Logic Placeholder
-          return { competitors: [], summary: 'Analiz yapılıyor...', lastUpdated: new Date().toISOString() };
+          const ai = new GoogleGenAI({ apiKey: getApiKey() });
+          const prompt = `
+            "${lead.firma_adi}" (${lead.sektor}, ${lead.ilce}) için rakipleri analiz et.
+            ÇIKTI (JSON): { "competitors": [{"name": "...", "website": "...", "strengths": ["..."], "weaknesses": ["..."]}], "summary": "..." }
+          `;
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: prompt,
+              config: { 
+                  tools: [{ googleSearch: {} }],
+                  responseMimeType: 'application/json'
+              }
+          });
+          
+          return parseGeminiJson(response.text || '{}');
       }
   },
 
   visuals: {
       generateHeroImage: async (lead: Lead): Promise<string> => {
-          // Mock or AI logic
-          return 'https://via.placeholder.com/800x400';
+          // Using a placeholder service since image generation models need strict handling
+          // In a real scenario with Imagen access, you'd use that here.
+          return `https://via.placeholder.com/800x400?text=${encodeURIComponent(lead.firma_adi)}+Web+Design`;
       },
       generateSocialPostImage: async (prompt: string): Promise<string> => {
-          return 'https://via.placeholder.com/400';
+          return `https://via.placeholder.com/400?text=Social+Post`;
       }
   },
 
   social: {
       analyzeInstagram: async (lead: Lead) => {
-          return { username: '@mock', bio: 'Mock bio', recentPostTheme: 'Mock', suggestedDmOpener: 'Hello', lastAnalyzed: new Date().toISOString() };
+          const ai = new GoogleGenAI({ apiKey: getApiKey() });
+          const prompt = `"${lead.firma_adi}" Instagram profilini analiz et (simülasyon). JSON: { "username": "...", "bio": "...", "recentPostTheme": "...", "suggestedDmOpener": "..." }`;
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: prompt,
+              config: { responseMimeType: 'application/json' }
+          });
+          return parseGeminiJson(response.text || '{}');
       }
   },
 
   setup: {
       generatePackages: async (baseCost: number, margin: number, serviceType: string): Promise<PricingPackage[]> => {
-          return [
-              { id: '1', name: 'Başlangıç', price: baseCost * (1 + margin/100), cost: baseCost, profit: baseCost * (margin/100), features: ['Temel'], description: 'Desc' }
-          ];
+          const apiKey = getApiKey();
+          if (!apiKey) throw new Error("API Key eksik!");
+          
+          const ai = new GoogleGenAI({ apiKey });
+          
+          const prompt = `
+            Bir dijital ajans için 3 adet fiyatlandırma paketi oluştur.
+            Hizmet: ${serviceType}
+            Taban Maliyet: ${baseCost} TL
+            Hedef Kar Marjı: %${margin}
+            
+            Paketler: Başlangıç, Profesyonel, Kurumsal.
+            Fiyatları mantıklı şekilde artır.
+            
+            ÇIKTI FORMATI (JSON Array):
+            [
+              {
+                "id": "p1",
+                "name": "Başlangıç Paketi",
+                "price": 5000,
+                "cost": 3000,
+                "profit": 2000,
+                "features": ["Özellik 1", "Özellik 2"],
+                "description": "Kısa açıklama"
+              }
+            ]
+          `;
+
+          try {
+              const response = await ai.models.generateContent({
+                  model: 'gemini-3-flash-preview',
+                  contents: prompt,
+                  config: { responseMimeType: 'application/json' }
+              });
+              
+              return parseGeminiJson(response.text || '[]');
+          } catch (error) {
+              console.warn("Gemini 3 failed, trying fallback model...");
+              // Fallback to 2.0 Flash Exp if 3 fails (often more stable for JSON)
+              const fallbackAi = new GoogleGenAI({ apiKey });
+              const fallbackResponse = await fallbackAi.models.generateContent({
+                  model: 'gemini-2.0-flash-exp',
+                  contents: prompt,
+                  config: { responseMimeType: 'application/json' }
+              });
+              return parseGeminiJson(fallbackResponse.text || '[]');
+          }
       },
+      
       generateInitialTemplates: async (packages: PricingPackage[]): Promise<EmailTemplate[]> => {
-          return [];
+          const apiKey = getApiKey();
+          const ai = new GoogleGenAI({ apiKey });
+          
+          const prompt = `
+            Bu paketleri satmak için 3 farklı soğuk e-posta şablonu (Intro, Follow-up 1, Follow-up 2) yaz.
+            Paketler: ${JSON.stringify(packages.map(p => p.name + ": " + p.price + "TL"))}
+            
+            JSON Array olarak döndür:
+            [{ "id": "t1", "name": "...", "type": "intro", "subject": "...", "body": "...", "isActive": true, "useCount": 0, "successCount": 0 }]
+          `;
+
+          const response = await ai.models.generateContent({
+              model: 'gemini-2.0-flash-exp', // Using 2.0 for stability
+              contents: prompt,
+              config: { responseMimeType: 'application/json' }
+          });
+
+          return parseGeminiJson(response.text || '[]');
       }
   },
 
@@ -393,12 +495,9 @@ export const api = {
           };
           
           if (useSheets()) {
-              // Google Calendar API returns the real link
               return await sheetsService.createCalendarEvent(newEvent);
           } else {
-              // Local Storage Mock Logic
               storage.saveCalendarEvent(newEvent);
-              // Return a mock link for local testing if requested
               return event.location === 'Google Meet' ? `https://meet.google.com/mock-${Math.random().toString(36).substr(2,5)}` : '';
           }
       }
