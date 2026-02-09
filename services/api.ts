@@ -16,34 +16,47 @@ const useSheets = () => {
 const getApiKey = () => {
     // 1. Env (Development)
     if (process.env.API_KEY) return process.env.API_KEY;
-    // 2. Explicit Gemini Key
+    // 2. Explicit Gemini Key (New)
     const geminiKey = localStorage.getItem('geminiApiKey');
     if (geminiKey) return geminiKey;
-    // 3. Fallback to generic 'apiKey' (Legacy)
+    // 3. Fallback to generic 'apiKey' (Legacy/Migration)
     return localStorage.getItem('apiKey') || '';
 };
 
 // --- ROBUST JSON PARSER ---
 const parseGeminiJson = (text: string) => {
+    const normalizeJsonText = (input: string) => {
+        let clean = input.replace(/```json/g, '').replace(/```/g, '').trim();
+        clean = clean.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+        clean = clean.replace(/,\s*([}\]])/g, '$1');
+        return clean;
+    };
+
     try {
         // 1. Try direct parse
         return JSON.parse(text);
     } catch (e) {
-        // 2. Extract from code blocks
-        let clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        // 2. Extract from code blocks + normalization
+        let clean = normalizeJsonText(text);
         try {
             return JSON.parse(clean);
         } catch (e2) {
-            // 3. Regex extraction (Find first [ or { and last ] or })
-            const match = clean.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-            if (match) {
-                try {
-                    return JSON.parse(match[0]);
-                } catch (e3) {
-                    throw new Error("JSON parse failed after regex extraction");
+            // 3. Replace single-quoted strings with double quotes (Risky but necessary fallback for bad LLM output)
+            const withDoubleQuotes = clean.replace(/'([^']*)'/g, '"$1"');
+            try {
+                return JSON.parse(withDoubleQuotes);
+            } catch (e3) {
+                // 4. Regex extraction (Find first [ or { and last ] or })
+                const match = withDoubleQuotes.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+                if (match) {
+                    try {
+                        return JSON.parse(match[0]);
+                    } catch (e4) {
+                        throw new Error("JSON parse failed after regex extraction");
+                    }
                 }
+                throw new Error("No valid JSON found in response");
             }
-            throw new Error("No valid JSON found in response");
         }
     }
 };

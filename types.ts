@@ -1,4 +1,5 @@
 
+
 export type LeadStatus = 
   | 'aktif' 
   | 'beklemede' 
@@ -94,7 +95,7 @@ export interface ActionLog {
 export interface AgentThought {
     id: string;
     timestamp: string;
-    type: 'decision' | 'analysis' | 'action' | 'wait' | 'error' | 'info' | 'success';
+    type: 'decision' | 'analysis' | 'action' | 'wait' | 'error' | 'info' | 'success' | 'warning';
     message: string;
     metadata?: any;
 }

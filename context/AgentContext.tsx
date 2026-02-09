@@ -34,21 +34,48 @@ interface AgentContextType {
 
 const AgentContext = createContext<AgentContextType | undefined>(undefined);
 
-// Helper to get API Key
-const getApiKey = () => process.env.API_KEY || localStorage.getItem('apiKey') || '';
+// Helper to get API Key (Updated to prioritize geminiApiKey)
+const getApiKey = () => {
+    if (process.env.API_KEY) return process.env.API_KEY;
+    const geminiKey = localStorage.getItem('geminiApiKey');
+    if (geminiKey) return geminiKey;
+    return localStorage.getItem('apiKey') || '';
+};
 
-// Reusable JSON Parser
+// Reusable Robust JSON Parser
 const parseGeminiJson = (text: string) => {
+    const normalizeJsonText = (input: string) => {
+        let clean = input.replace(/```json/g, '').replace(/```/g, '').trim();
+        clean = clean.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+        clean = clean.replace(/,\s*([}\]])/g, '$1');
+        return clean;
+    };
+
     try {
+        // 1. Try direct parse
         return JSON.parse(text);
     } catch (e) {
-        let clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        // 2. Extract from code blocks + normalization
+        let clean = normalizeJsonText(text);
         try {
             return JSON.parse(clean);
         } catch (e2) {
-            const match = clean.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-            if (match) return JSON.parse(match[0]);
-            throw new Error("JSON parse failed");
+            // 3. Replace single-quoted strings with double quotes (Risky but necessary fallback for bad LLM output)
+            const withDoubleQuotes = clean.replace(/'([^']*)'/g, '"$1"');
+            try {
+                return JSON.parse(withDoubleQuotes);
+            } catch (e3) {
+                // 4. Regex extraction (Find first [ or { and last ] or })
+                const match = withDoubleQuotes.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+                if (match) {
+                    try {
+                        return JSON.parse(match[0]);
+                    } catch (e4) {
+                        throw new Error("JSON parse failed after regex extraction");
+                    }
+                }
+                throw new Error("JSON parse failed: " + text.substring(0, 50) + "...");
+            }
         }
     }
 };
@@ -198,15 +225,23 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
         const ai = new GoogleGenAI({ apiKey: getApiKey() });
         
         const prompt = `
-            İstanbul ${districtToSearch} bölgesinde "${sectorToSearch}" sektöründe hizmet veren 2 adet YEREL ve BUTİK işletme bul.
-            Zincir marketleri, hastaneleri, kurumsal firmaları ele. Sadece esnaf/KOBİ bul.
-            JSON Array: [{ "firma_adi": "...", "adres": "..." }]
+            GÖREV: İstanbul ${districtToSearch} bölgesinde "${sectorToSearch}" sektöründe hizmet veren, web sitesi olmayan veya yenilenmeye ihtiyacı olan 2 adet YEREL işletme bul.
+            
+            KURALLAR:
+            1. Zincir marketleri, hastaneleri, kurumsal büyük firmaları ELE. Sadece esnaf/KOBİ bul.
+            2. Kesinlikle JSON formatında döndür.
+            
+            JSON FORMATI: 
+            [{ "firma_adi": "...", "adres": "..." }]
         `;
 
         const result = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
             contents: prompt,
-            config: { tools: [{ googleSearch: {} }] }
+            config: { 
+                tools: [{ googleSearch: {} }],
+                responseMimeType: 'application/json' // FORCE JSON
+            }
         });
 
         const data = parseGeminiJson(result.text || '[]');
@@ -244,10 +279,12 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
                 setAgentStatus('Yeni firma bulunamadı (Duplicate)');
                 addThought('analysis', 'Bulunan firmalar zaten veritabanında mevcut.');
             }
+        } else {
+            addThought('warning', 'Arama yapıldı ancak uygun formatta veri dönmedi.');
         }
       } catch (e) { 
           console.error("Auto discovery failed", e);
-          addThought('error', 'Keşif işlemi sırasında hata oluştu. (JSON formatı bozuk olabilir)');
+          addThought('error', 'Keşif işlemi sırasında hata oluştu. (API veya JSON hatası)');
       }
   };
 
@@ -273,7 +310,10 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
           const result = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
             contents: prompt,
-            config: { tools: [{ googleSearch: {} }] }
+            config: { 
+                tools: [{ googleSearch: {} }],
+                responseMimeType: 'application/json' 
+            }
           });
           
           const data = parseGeminiJson(result.text || '{}');

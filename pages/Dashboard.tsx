@@ -1,4 +1,5 @@
 
+
 import React, { useEffect, useState, useRef } from 'react';
 import { 
   Building2, 
@@ -292,6 +293,7 @@ const Dashboard: React.FC = () => {
                                     thought.type === 'success' ? 'text-green-400' :
                                     thought.type === 'error' ? 'text-red-400' :
                                     thought.type === 'wait' ? 'text-amber-400' :
+                                    thought.type === 'warning' ? 'text-orange-400' :
                                     'text-blue-400'
                                 }`}>
                                     [{thought.type}]

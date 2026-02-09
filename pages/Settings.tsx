@@ -34,6 +34,8 @@ const Settings: React.FC = () => {
   // Initialize state with specific keys, falling back to generic 'apiKey' if specific ones aren't found (migration)
   const [settings, setSettings] = useState({
       clientId: localStorage.getItem('clientId') || '',
+      // Separate keys: One for AI (Gemini), one for Google Cloud (Sheets/Calendar)
+      // Fallback to legacy 'apiKey' if specific keys aren't set yet
       geminiApiKey: localStorage.getItem('geminiApiKey') || localStorage.getItem('apiKey') || '',
       googleApiKey: localStorage.getItem('googleApiKey') || localStorage.getItem('apiKey') || '',
       sheetId: localStorage.getItem('sheetId') || '',
@@ -132,7 +134,7 @@ const Settings: React.FC = () => {
         localStorage.setItem('geminiApiKey', cleanGeminiKey);
         localStorage.setItem('googleApiKey', cleanGoogleKey);
         
-        // Update legacy key for fallback compatibility
+        // Update legacy key for fallback compatibility (mostly for Gemini)
         localStorage.setItem('apiKey', cleanGeminiKey); 
 
         localStorage.setItem('clientId', cleanClientId);
@@ -145,7 +147,7 @@ const Settings: React.FC = () => {
         sheetsService.setSpreadsheetId(settings.sheetId);
 
         try {
-            // Eğer Client ID varsa initialize et
+            // Eğer Client ID ve Google Key varsa initialize et
             if (cleanClientId && cleanGoogleKey) {
                 await sheetsService.initialize(cleanGoogleKey, cleanClientId);
             }
@@ -187,6 +189,7 @@ const Settings: React.FC = () => {
   const handleGoogleLogin = async () => {
       setAuthLoading(true);
       try {
+          // Use the specific Google Cloud Key for sheets service
           await sheetsService.initialize(settings.googleApiKey.trim(), settings.clientId.trim());
           await sheetsService.handleAuthClick();
           setIsAuthenticated(true);
@@ -264,7 +267,7 @@ const Settings: React.FC = () => {
 
       {activeTab === 'pricing' ? (
           <div className="space-y-8">
-              {/* Pricing Content (No changes needed here) */}
+              {/* Pricing Content */}
               <div className="bg-gradient-to-br from-indigo-900 to-purple-900 rounded-2xl p-8 text-white shadow-xl relative overflow-hidden">
                   <div className="absolute top-0 right-0 w-64 h-64 bg-white opacity-5 rounded-full -mr-16 -mt-16"></div>
                   <div className="absolute bottom-0 left-0 w-48 h-48 bg-purple-500 opacity-20 blur-3xl -ml-10 -mb-10"></div>
