@@ -27,7 +27,6 @@ const useSheets = () => {
 };
 
 export const api = {
-  // ... (leads, gmail, whatsapp, dashboard, tasks, calendar modules unchanged)
   leads: {
     getAll: async (): Promise<Lead[]> => {
       if (useSheets()) return await sheetsService.getLeads();
@@ -144,7 +143,10 @@ export const api = {
       send: async (to: string, subject: string, body: string, attachments?: any[]) => {
           gamificationService.recordAction('email_sent');
           if (useSheets()) return await gmailService.sendEmail(to, subject, body, attachments);
+          
+          // Local Simulation with Delay
           await new Promise(resolve => setTimeout(resolve, 800));
+          console.log(`[Mock Email] To: ${to}, Subject: ${subject}`);
           return { id: 'local-mock-id' };
       }
   },
@@ -200,7 +202,6 @@ export const api = {
       update: async (template: EmailTemplate) => { storage.updateTemplate(template); },
       delete: async (id: string) => { storage.deleteTemplate(id); },
       
-      // UPDATED: Now uses Persona Analysis if available
       generateColdEmail: async (lead: Lead) => {
           const ai = new GoogleGenAI({ apiKey: getApiKey() });
           
@@ -460,7 +461,6 @@ export const api = {
           return parseGeminiJson(response.text || '{}');
       }
   },
-  // ... (competitors, visuals, social modules unchanged)
   competitors: {
       analyze: async (lead: Lead): Promise<CompetitorAnalysis> => {
           const ai = new GoogleGenAI({ apiKey: getApiKey() });

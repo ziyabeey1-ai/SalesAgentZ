@@ -201,8 +201,22 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 lead_durumu: 'onay_bekliyor'
             };
 
+            if (lead.email) {
+                await api.gmail.send(lead.email, draftSubject, draftContent);
+                await api.leads.logInteraction(lead.id, 'email', `Otomatik takip yanıtı: ${draftSubject}`);
+                await api.leads.update({
+                    ...lead,
+                    lead_durumu: 'takipte',
+                    son_kontakt_tarihi: new Date().toISOString().slice(0, 10),
+                    draftResponse: undefined
+                });
+                await api.dashboard.logAction('Otomatik Yanıt', `${lead.firma_adi} için takip yanıtı gönderildi.`, 'success');
+                addThought('success', `Otomatik yanıt gönderildi: ${lead.firma_adi}`);
+                return true;
+            }
+
             await api.leads.update(updatedLead);
-            addThought('success', `Taslak oluşturuldu: ${lead.firma_adi}`);
+            addThought('warning', `${lead.firma_adi} email olmadığı için taslak onaya bırakıldı.`);
             return true;
         } catch (e) {
             console.error(e);
@@ -384,16 +398,38 @@ ${item.firsat_nedeni || 'AI keşfi ile eklendi.'}`
         return false;
     };
 
-    const performOutreach = async (leads: Lead[]): Promise<boolean> => {
-        // Find leads ready for first contact: Active, Has Email, No Contact Date
+    const performOutreach = async (leads: Lead[]) => {
         const pendingQueue = leads.filter(l => l.lead_durumu === 'aktif' && l.email && !l.son_kontakt_tarihi);
         if (pendingQueue.length === 0) return false;
 
         const templates = await api.templates.getAll();
         const activeIntroTemplates = templates.filter(t => t.type === 'intro' && t.isActive);
+        const lead = pendingQueue.sort((a, b) => b.lead_skoru - a.lead_skoru)[0];
+
         if (activeIntroTemplates.length === 0) {
-            addThought('warning', 'Aktif intro şablonu bulunamadı, outreach atlandı.');
-            return false;
+            addThought('info', 'Aktif intro şablonu bulunamadı, AI ile anlık outreach oluşturuluyor.');
+            try {
+                const generated = await api.templates.generateColdEmail(lead);
+                const subject = generated.subject || `${lead.firma_adi} için kısa bir tanışma`;
+                const body = generated.body || `Merhaba ${lead.yetkili_adi || 'Yetkili'}, ${lead.firma_adi} için dijital büyüme fırsatlarını konuşabilir miyiz?`;
+
+                if (!checkAndIncrementCost()) return false;
+
+                await api.gmail.send(lead.email, subject, body);
+                await api.leads.logInteraction(lead.id, 'email', `Otomatik outreach (AI): ${subject}`);
+                await api.leads.update({
+                    ...lead,
+                    lead_durumu: 'takipte',
+                    son_kontakt_tarihi: new Date().toISOString().slice(0, 10)
+                });
+                await api.dashboard.logAction('Otomatik Outreach', `${lead.firma_adi} için AI üretimli intro mail gönderildi.`, 'success');
+                addThought('success', `${lead.firma_adi} için AI üretimli intro mail gönderildi.`);
+                return true;
+            } catch (e) {
+                console.error('Outreach fallback error', e);
+                addThought('error', `${lead.firma_adi} için AI outreach üretilemedi.`);
+                return false;
+            }
         }
 
         const getTemplateScore = (template: any) => {
@@ -403,7 +439,6 @@ ${item.firsat_nedeni || 'AI keşfi ile eklendi.'}`
         };
 
         const bestTemplate = [...activeIntroTemplates].sort((a, b) => getTemplateScore(b) - getTemplateScore(a))[0];
-        const lead = pendingQueue.sort((a, b) => b.lead_skoru - a.lead_skoru)[0];
 
         const replacements: Record<string, string> = {
             '{firma_adi}': lead.firma_adi,
@@ -460,9 +495,8 @@ ${item.firsat_nedeni || 'AI keşfi ile eklendi.'}`
             // PRIORITY 1: Reply Drafting (High Value)
             if (!actionTaken) actionTaken = await performAutoReplyDrafting(leads);
 
-            // PRIORITY 2: Outreach (Business Hours Only - Revenue Driver)
-            if (!actionTaken && isBusinessHours()) {
-                // Check if we have leads ready for contact
+            // PRIORITY 2: Outreach (Fully Autonomous)
+            if (!actionTaken) {
                 actionTaken = await performOutreach(leads);
             }
 
@@ -473,7 +507,6 @@ ${item.firsat_nedeni || 'AI keşfi ile eklendi.'}`
             if (!actionTaken) actionTaken = await performSmartDiscovery(leads);
 
             if (actionTaken) {
-                // BURST MODE: If we did something, do the next thing fast!
                 burstStreakRef.current += 1;
                 setAgentStatus(`Burst Mode x${burstStreakRef.current}: İşlem tamamlandı, yeni tur hazırlanıyor...`);
                 loopTimeoutRef.current = setTimeout(agentLoop, BUSY_INTERVAL);
