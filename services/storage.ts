@@ -1,4 +1,3 @@
-
 import { Lead, Task, ActionLog, Interaction, DashboardStats, UsageStats, EmailTemplate, TemplateStats, UserProfile, CalendarEvent, RegionStat } from '../types';
 import { MOCK_LEADS, MOCK_TASKS, MOCK_LOGS, MOCK_INTERACTIONS, MOCK_TEMPLATES } from './mockService';
 

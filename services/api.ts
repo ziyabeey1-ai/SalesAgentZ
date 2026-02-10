@@ -1,4 +1,3 @@
-
 import { Lead, DashboardStats, Task, ActionLog, Interaction, EmailTemplate, InteractionAnalysis, InteractionType, CalendarEvent, UserProfile, PricingPackage } from '../types';
 import { sheetsService } from './googleSheetsService';
 import { gmailService } from './gmailService';
@@ -322,7 +321,7 @@ export const api = {
           const hotLeads = leads.filter(l => l.lead_skoru >= 4 && l.lead_durumu !== 'olumlu').length;
           const streak = progress.streakDays;
 
-          // 2. Generate Script (Text) - Updated to Gemini 3
+          // 2. Generate Script (Text)
           const scriptPrompt = `
             Aşağıdaki verilere dayanarak bir satış ajanı için 40-50 kelimelik, enerjik, motive edici ve Türkçe bir sabah brifingi metni yaz.
             Veriler: %${stats.hedef_orani} hedef, ${hotLeads} sıcak lead, ${urgentTasks} acil görev, ${streak} gün seri.
@@ -372,7 +371,7 @@ export const api = {
           `;
 
           const response = await ai.models.generateContent({
-              model: 'gemini-3-flash-preview', // Updated to 3 for better results
+              model: 'gemini-3-flash-preview',
               contents: prompt,
               config: { responseMimeType: 'application/json' }
           });
@@ -389,6 +388,7 @@ export const api = {
 
   strategy: {
       getInsights: async () => {
+          // Placeholder
           return [];
       }
   },
@@ -400,32 +400,23 @@ export const api = {
             "${lead.firma_adi}" (${lead.sektor}, ${lead.ilce}) için rakipleri analiz et.
             ÇIKTI (JSON): { "competitors": [{"name": "...", "website": "...", "strengths": ["..."], "weaknesses": ["..."]}], "summary": "..." }
           `;
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: prompt,
+              config: { 
+                  tools: [{ googleSearch: {} }],
+                  responseMimeType: 'application/json'
+              }
+          });
           
-          try {
-              // Try with search first (no mimeType to avoid 404)
-              const response = await ai.models.generateContent({
-                  model: 'gemini-3-flash-preview',
-                  contents: prompt,
-                  config: { 
-                      tools: [{ googleSearch: {} }]
-                  }
-              });
-              return parseGeminiJson(response.text || '{}');
-          } catch (e) {
-              console.warn("Competitor search failed, using knowledge fallback", e);
-              // Fallback
-              const response = await ai.models.generateContent({
-                  model: 'gemini-3-flash-preview',
-                  contents: prompt + "\n(Lütfen arama yapmadan bildiklerinle veya genel sektör bilgisiyle yanıtla)",
-                  config: { responseMimeType: 'application/json' }
-              });
-              return parseGeminiJson(response.text || '{}');
-          }
+          return parseGeminiJson(response.text || '{}');
       }
   },
 
   visuals: {
       generateHeroImage: async (lead: Lead): Promise<string> => {
+          // Using a placeholder service since image generation models need strict handling
+          // In a real scenario with Imagen access, you'd use that here.
           return `https://via.placeholder.com/800x400?text=${encodeURIComponent(lead.firma_adi)}+Web+Design`;
       },
       generateSocialPostImage: async (prompt: string): Promise<string> => {
@@ -476,14 +467,25 @@ export const api = {
             ]
           `;
 
-          // Removed fallback to 2.0, sticking to standard 3
-          const response = await ai.models.generateContent({
-              model: 'gemini-3-flash-preview',
-              contents: prompt,
-              config: { responseMimeType: 'application/json' }
-          });
-          
-          return parseGeminiJson(response.text || '[]');
+          try {
+              const response = await ai.models.generateContent({
+                  model: 'gemini-3-flash-preview',
+                  contents: prompt,
+                  config: { responseMimeType: 'application/json' }
+              });
+              
+              return parseGeminiJson(response.text || '[]');
+          } catch (error) {
+              console.warn("Gemini 3 failed, trying fallback model...");
+              // Fallback to 2.0 Flash Exp if 3 fails (often more stable for JSON)
+              const fallbackAi = new GoogleGenAI({ apiKey });
+              const fallbackResponse = await fallbackAi.models.generateContent({
+                  model: 'gemini-2.0-flash-exp',
+                  contents: prompt,
+                  config: { responseMimeType: 'application/json' }
+              });
+              return parseGeminiJson(fallbackResponse.text || '[]');
+          }
       },
       
       generateInitialTemplates: async (packages: PricingPackage[]): Promise<EmailTemplate[]> => {
@@ -499,7 +501,7 @@ export const api = {
           `;
 
           const response = await ai.models.generateContent({
-              model: 'gemini-3-flash-preview', // Updated to 3
+              model: 'gemini-3-flash-preview',
               contents: prompt,
               config: { responseMimeType: 'application/json' }
           });

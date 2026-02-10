@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Rocket, UserCircle, Briefcase, Zap, Check, ArrowRight, Loader2, Key, Cloud, Database, Image as ImageIcon, Wand2, Plus } from 'lucide-react';
