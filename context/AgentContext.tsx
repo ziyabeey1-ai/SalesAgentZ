@@ -30,7 +30,7 @@ const AgentContext = createContext<AgentContextType | undefined>(undefined);
 
 const AGENT_MODEL = 'gemini-3-flash-preview';
 const BURST_INTERVAL = 3000; // Faster burst
-const IDLE_INTERVAL = 15000; // Reduced idle time to 15s
+const IDLE_INTERVAL = 10000; // Reduced idle time to 10s for faster recovery
 const MIN_ACTIVE_LEADS = 8;
 const MIN_ENRICHMENT_SCORE = 3;
 const AGENT_RUNNING_KEY = 'agentRunning';
@@ -343,7 +343,18 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     const performSmartDiscovery = async (leads: Lead[]) => {
-        if (leads.filter(isProspectLead).length >= MIN_ACTIVE_LEADS) {
+        // FIX: Check Actionable Leads (With Email) instead of just raw count
+        const actionableLeads = leads.filter(l => isProspectLead(l) && l.email && !l.son_kontakt_tarihi).length;
+        const totalActive = leads.filter(isProspectLead).length;
+
+        // If we have enough actionable leads, skip discovery
+        if (actionableLeads >= 3) {
+            return false;
+        }
+
+        // If we have way too many leads clogging the pipe (e.g., 50 leads but no emails), pause to prevent overflow
+        if (totalActive > 25) {
+            addThought('warning', 'Boru hattında çok fazla e-postasız lead var. Keşif duraklatıldı.');
             return false;
         }
 
@@ -353,15 +364,14 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const district = targetDistrict === 'Tümü' ? 'Kadıköy' : targetDistrict;
         const sector = targetSector === 'Tümü' ? 'Diğer' : targetSector;
 
-        setAgentStatus('Yeni fırsatlar keşfediliyor...');
-        addThought('action', `${district} bölgesinde ${sector} için otonom lead keşfi başlatıldı.`);
+        setAgentStatus('Pipeline besleniyor: Yeni fırsatlar aranıyor...');
+        addThought('action', `${district} bölgesinde ${sector} için nitelikli (maili olan) lead aranıyor.`);
 
         try {
-            // Using API Wrapper for safer execution and parsing
             const discoveredLeads = await api.leads.discover(sector, district);
 
             if (discoveredLeads.length === 0) {
-                addThought('decision', 'Otonom keşifte uygun lead bulunamadı.');
+                addThought('decision', 'Arama yapıldı ancak uygun lead bulunamadı.');
                 return false;
             }
 
@@ -378,11 +388,11 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             }
 
             if (addedCount > 0) {
-                addThought('success', `Otonom keşif tamamlandı: ${addedCount} yeni lead eklendi.`);
+                addThought('success', `Pipeline güncellendi: ${addedCount} yeni lead eklendi.`);
                 return true;
             }
 
-            addThought('decision', 'Keşif tamamlandı ancak eklenebilir yeni lead bulunamadı.');
+            addThought('decision', 'Bulunan leadler zaten sistemde mevcut.');
         } catch (e) {
             console.error('Discovery error', e);
             addThought('error', 'Otonom keşif sırasında hata oluştu.');
@@ -513,7 +523,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 }
                 loopTimeoutRef.current = setTimeout(agentLoop, BURST_INTERVAL);
             } else {
-                setAgentStatus(isBusinessHours() ? 'Taranıyor... (İşlem Yok)' : 'Mesai Dışı (Uyku Modu)');
+                setAgentStatus(isBusinessHours() ? 'Analiz Ediliyor... (Uygun Aksiyon Yok)' : 'Mesai Dışı (Uyku Modu)');
                 burstStreakRef.current = 0;
                 loopTimeoutRef.current = setTimeout(agentLoop, IDLE_INTERVAL);
             }
