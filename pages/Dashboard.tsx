@@ -65,6 +65,40 @@ const Dashboard: React.FC = () => {
   // Learning Insights State
   const [aiInsights, setAiInsights] = useState<any[]>([]);
 
+  const normalizeStrategyResult = (raw: any): MarketStrategyResult => {
+    return {
+      marketAnalysis: {
+        sectorDigitalMaturity: Number(raw?.marketAnalysis?.sectorDigitalMaturity ?? 5),
+        regionEconomicActivity: Number(raw?.marketAnalysis?.regionEconomicActivity ?? 5),
+        seasonalFactor: raw?.marketAnalysis?.seasonalFactor || 'Bilinmiyor',
+        overallOpportunity: raw?.marketAnalysis?.overallOpportunity || 'Orta'
+      },
+      idealLeadProfile: {
+        companyAge: raw?.idealLeadProfile?.companyAge || '-',
+        employeeCount: raw?.idealLeadProfile?.employeeCount || '-',
+        estimatedRevenue: raw?.idealLeadProfile?.estimatedRevenue || '-',
+        digitalMaturity: Number(raw?.idealLeadProfile?.digitalMaturity ?? 3),
+        hasWebsite: Boolean(raw?.idealLeadProfile?.hasWebsite),
+        reasoning: raw?.idealLeadProfile?.reasoning || 'Yeterli veri yok.'
+      },
+      strategyPriority: Array.isArray(raw?.strategyPriority)
+        ? raw.strategyPriority.map((item: any, idx: number) => ({
+            name: item?.name || `Öneri ${idx + 1}`,
+            priority: Number(item?.priority ?? idx + 1),
+            reasoning: item?.reasoning || 'Açıklama yok.',
+            searchTerms: Array.isArray(item?.searchTerms) ? item.searchTerms : []
+          }))
+        : [],
+      regionRotation: Array.isArray(raw?.regionRotation) ? raw.regionRotation : [],
+      actionPlan: {
+        nextCycle: raw?.actionPlan?.nextCycle || '-',
+        expectedLeadQuality: raw?.actionPlan?.expectedLeadQuality || 'Orta',
+        estimatedConversion: raw?.actionPlan?.estimatedConversion || '-'
+      },
+      lastUpdated: raw?.lastUpdated || new Date().toISOString()
+    };
+  };
+
   useEffect(() => {
     const syncGeminiConfig = () => {
       const key = (localStorage.getItem('geminiApiKey') || localStorage.getItem('apiKey') || '').trim();
@@ -119,7 +153,7 @@ const Dashboard: React.FC = () => {
       try {
           // Use Agent Config for target
           const result = await api.strategy.analyzeMarket(agentConfig.targetSector, agentConfig.targetDistrict);
-          setStrategyResult(result);
+          setStrategyResult(normalizeStrategyResult(result));
       } catch (e) {
           console.error(e);
       } finally {
