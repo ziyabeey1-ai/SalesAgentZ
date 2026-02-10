@@ -217,13 +217,18 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     const isBusinessHours = (): boolean => {
+        // DEMO MODU: Her zaman açık (Gece vardiyası kısıtlaması kaldırıldı)
+        // Kullanıcı testi için 7/24 aktif çalışır.
+        return true;
+        
+        /* Orijinal Mesai Mantığı (Production için açılabilir)
         const now = new Date();
         const hour = now.getHours();
         const day = now.getDay();
-        // Cumartesi Pazar da çalışmasın (veya ayara göre değişebilir)
-        // Hafta içi 09:00 - 18:00 arası "Aktif Mesai"
+        // Cumartesi Pazar da çalışmasın
         if (day === 0 || day === 6) return false;
         return hour >= 9 && hour < 18;
+        */
     };
 
     const isFollowupDue = (lead: Lead): boolean => {
@@ -630,13 +635,14 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             // Refill pipeline if low
             if (!actionTaken) actionTaken = await performSmartDiscovery(leads);
 
-            // --- PRIORITY 4: ACTIVE COMMUNICATION (Daytime Only) ---
+            // --- PRIORITY 4: ACTIVE COMMUNICATION (Now 24/7 Enabled) ---
             if (isDaytime) {
                 if (!actionTaken) actionTaken = await performAutoReplyDrafting(leads, false); // Send allowed
                 if (!actionTaken) actionTaken = await performOutreach(leads);
             } else {
-                // NIGHT MODE: Draft but DO NOT SEND
-                if (!actionTaken) actionTaken = await performAutoReplyDrafting(leads, true); // Draft only
+                // If isDaytime logic was kept, this would be Night Mode (Draft only)
+                // But with isBusinessHours returning true, this block is unreachable in default setup.
+                if (!actionTaken) actionTaken = await performAutoReplyDrafting(leads, true); 
             }
 
             if (actionTaken) {
@@ -660,11 +666,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 setAgentStatus(`Aktif İşlem (x${burstStreakRef.current})...`);
                 loopTimeoutRef.current = setTimeout(agentLoop, BURST_INTERVAL);
             } else {
-                if (isDaytime) {
-                    setAgentStatus('Beklemede (Taranıyor)...');
-                } else {
-                    setAgentStatus('Gece Vardiyası: Keşif & Bakım Modu');
-                }
+                setAgentStatus('Beklemede (Taranıyor)...');
                 burstStreakRef.current = 0;
                 // Fast recovery loop to check for new tasks
                 loopTimeoutRef.current = setTimeout(agentLoop, IDLE_INTERVAL);
