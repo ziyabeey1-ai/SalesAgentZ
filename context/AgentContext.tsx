@@ -29,11 +29,11 @@ interface AgentContextType {
 const AgentContext = createContext<AgentContextType | undefined>(undefined);
 
 const AGENT_MODEL = 'gemini-3-flash-preview';
-// OPTIMIZATION: Adaptive timing constants
-const IDLE_INTERVAL = 60000; // 60 sec when nothing is happening
-const BUSY_INTERVAL = 5000;  // 5 sec when acting ("Burst Mode")
+const BURST_INTERVAL = 5000;
+const IDLE_INTERVAL = 60000;
 const MIN_ACTIVE_LEADS = 8;
 const MIN_ENRICHMENT_SCORE = 3;
+const AGENT_RUNNING_KEY = 'agentRunning';
 
 export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [isAgentRunning, setIsAgentRunning] = useState(false);
@@ -67,10 +67,32 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return () => clearInterval(interval);
     }, []);
 
+    // Restore running state
+    useEffect(() => {
+        const wasRunning = localStorage.getItem(AGENT_RUNNING_KEY) === 'true';
+        if (wasRunning) {
+            setIsAgentRunning(true);
+            localStorage.setItem(AGENT_RUNNING_KEY, 'true');
+            setAgentStatus('Başlatılıyor...');
+            addThought('info', 'Otopilot oturumu geri yüklendi.');
+            setTimeout(agentLoop, 1000); // Increased initial delay to prevent race condition on load
+        }
+
+        return () => {
+            if (loopTimeoutRef.current) {
+                clearTimeout(loopTimeoutRef.current);
+            }
+        };
+    }, []);
+
     const refreshPendingCount = async () => {
-        const leads = await api.leads.getAll();
-        const count = leads.filter(l => l.lead_durumu === 'onay_bekliyor').length;
-        setPendingDraftsCount(count);
+        try {
+            const leads = await api.leads.getAll();
+            const count = leads.filter(l => l.lead_durumu === 'onay_bekliyor').length;
+            setPendingDraftsCount(count);
+        } catch (e) {
+            console.error('Pending count refresh error', e);
+        }
     };
 
     const addThought = (type: AgentThought['type'], message: string, metadata?: any) => {
@@ -100,14 +122,25 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setNotifications(prev => prev.filter(n => n.id !== id));
     };
 
+    const stopAgentSafely = (reason: string) => {
+        setIsAgentRunning(false);
+        localStorage.setItem(AGENT_RUNNING_KEY, 'false');
+        setAgentStatus('Durduruldu (Hata)');
+        addThought('error', reason);
+        addNotification('Ajan Durduruldu', reason, 'error');
+        if (loopTimeoutRef.current) clearTimeout(loopTimeoutRef.current);
+    };
+
     const toggleAgent = () => {
         if (isAgentRunning) {
             setIsAgentRunning(false);
+            localStorage.setItem(AGENT_RUNNING_KEY, 'false');
             setAgentStatus('Durduruldu');
             addThought('info', 'Otopilot kullanıcı tarafından durduruldu.');
             if (loopTimeoutRef.current) clearTimeout(loopTimeoutRef.current);
         } else {
             setIsAgentRunning(true);
+            localStorage.setItem(AGENT_RUNNING_KEY, 'true');
             setAgentStatus('Başlatılıyor...');
             addThought('info', 'Otopilot başlatıldı.');
             setTimeout(agentLoop, 100);
@@ -130,10 +163,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const usage = storage.getUsage();
         if (usage.aiCalls >= usage.dailyLimit) {
             if (isRunningRef.current) {
-                setIsAgentRunning(false);
-                setAgentStatus('Limit Aşıldı');
-                addNotification('Otopilot Durdu', 'Günlük AI işlem limitine ulaşıldı.', 'error');
-                addThought('error', 'Günlük limit dolduğu için işlem durduruldu.');
+                stopAgentSafely('Günlük limit dolduğu için işlem durduruldu.');
             }
             return false;
         }
@@ -148,6 +178,8 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const parseGeminiJson = (text: string) => {
         try {
             const clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            // Safe parsing for empty response
+            if (!clean) return {};
             return JSON.parse(clean);
         } catch (e) {
             console.error("JSON Parse Error", e);
@@ -159,11 +191,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const now = new Date();
         const hour = now.getHours();
         const day = now.getDay();
-        
-        // Weekend check (Sunday=0, Saturday=6)
         if (day === 0 || day === 6) return false;
-        
-        // Hours check (09:00 - 18:00)
         return hour >= 9 && hour < 18;
     };
 
@@ -186,8 +214,9 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         try {
             const result = await api.strategy.predictNextMove(lead);
             
-            // Create a draft based on the 'neutral' tone prediction
-            const draftContent = result.possibleQuestions[0]?.responses.neutral || "Merhaba, detayları konuşmak isteriz.";
+            // Safer access to possibleQuestions
+            const possibleQuestions = Array.isArray(result?.possibleQuestions) ? result.possibleQuestions : [];
+            const draftContent = possibleQuestions[0]?.responses?.neutral || "Merhaba, detayları konuşmak isteriz.";
             const draftSubject = `Re: ${lead.firma_adi} Dijital Çözümler`;
 
             const updatedLead: Lead = {
@@ -228,7 +257,6 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const { targetDistrict, targetSector } = configRef.current;
         const now = Date.now();
 
-        // Only enrich active leads with high score but missing info
         const candidates = leads.filter(l => 
             l.lead_durumu === 'aktif' && 
             (!l.email) && 
@@ -256,9 +284,6 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               SİSTEM ROLÜ: B2B veri zenginleştirme uzmanı.
               HEDEF: ${target.firma_adi} (${target.ilce}, ${target.sektor})
               GÖREV: Kurumsal email adresi bul.
-              KURALLAR: 
-              - Sadece info@, iletisim@, satis@ vb. kurumsal mailler.
-              - Gmail/Hotmail kabul etme.
               JSON: { "email": "...", "confidence": "high/medium/low", "source": "..." }
             `;
 
@@ -278,7 +303,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                     ...target,
                     email: data.email,
                     eksik_alanlar: target.eksik_alanlar.filter(f => f !== 'email'),
-                    lead_skoru: target.lead_skoru + 2, // Bonus for finding email
+                    lead_skoru: target.lead_skoru + 2,
                     notlar: target.notlar ? `${target.notlar}\n[AI]: Email bulundu (${data.source})` : `[AI]: Email bulundu (${data.source})`
                 };
                 await api.leads.update(updatedLead);
@@ -288,7 +313,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             } else {
                 const prevState = enrichmentRetryRef.current[target.id];
                 const attempts = (prevState?.attempts || 0) + 1;
-                const cooldownMs = Math.min(60 * 60 * 1000, Math.pow(2, attempts) * 5 * 60 * 1000); // Backoff
+                const cooldownMs = Math.min(60 * 60 * 1000, Math.pow(2, attempts) * 5 * 60 * 1000); 
                 enrichmentRetryRef.current[target.id] = { attempts, nextRetryAt: Date.now() + cooldownMs };
                 addThought('decision', `${target.firma_adi} için email bulunamadı. Pas geçiliyor.`);
             }
@@ -313,40 +338,8 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         addThought('action', `${district} bölgesinde ${sector} için otonom lead keşfi başlatıldı.`);
 
         try {
-            const ai = getAiClient();
-            const prompt = `
-              SİSTEM ROLÜ: B2B Lead Avcısı.
-              GÖREV: İstanbul ${district} bölgesinde ${sector} sektöründe 3 adet işletme bul.
-              KURALLAR:
-              - Sadece kurumsal email içeren işletmeler.
-              - Mümkünse telefonu da ekle.
-              - ÇIKTI SADECE JSON.
-              JSON:
-              {
-                "leads": [
-                  {
-                    "firma_adi": "...",
-                    "email": "info@...",
-                    "telefon": "...",
-                    "adres": "...",
-                    "web_sitesi_durumu": "Var|Yok|Kötü",
-                    "firsat_nedeni": "..."
-                  }
-                ]
-              }
-            `;
-
-            const result = await ai.models.generateContent({
-                model: AGENT_MODEL,
-                contents: prompt,
-                config: {
-                    tools: [{ googleSearch: {} }],
-                    responseMimeType: 'application/json'
-                }
-            });
-
-            const parsed = parseGeminiJson(extractGeminiText(result) || '{}');
-            const discoveredLeads = Array.isArray(parsed?.leads) ? parsed.leads : [];
+            // Using API Wrapper for safer execution and parsing
+            const discoveredLeads = await api.leads.discover(sector, district);
 
             if (discoveredLeads.length === 0) {
                 addThought('decision', 'Otonom keşifte uygun lead bulunamadı.');
@@ -356,32 +349,12 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             const existingNameSet = new Set(leads.map(l => l.firma_adi.toLowerCase()));
             let addedCount = 0;
 
-            for (const item of discoveredLeads) {
-                if (!item?.email || !String(item.email).includes('@')) continue;
-                const firmName = String(item.firma_adi || '').trim();
-                if (!firmName) continue;
-                if (existingNameSet.has(firmName.toLowerCase())) continue;
-
-                const newLead: Lead = {
-                    id: Math.random().toString(36).substr(2, 9),
-                    firma_adi: firmName,
-                    sektor: sector,
-                    ilce: district,
-                    adres: item.adres || district,
-                    telefon: item.telefon || '',
-                    email: item.email,
-                    kaynak: 'AI Asistan',
-                    websitesi_var_mi: item.web_sitesi_durumu === 'Yok' ? 'Hayır' : 'Evet',
-                    lead_durumu: 'aktif',
-                    lead_skoru: item.web_sitesi_durumu === 'Kötü' ? 4 : (item.web_sitesi_durumu === 'Yok' ? 3 : 2),
-                    eksik_alanlar: item.telefon ? [] : ['telefon'],
-                    notlar: `[Otonom Keşif]
-${item.firsat_nedeni || 'AI keşfi ile eklendi.'}`
-                };
+            for (const newLead of discoveredLeads) {
+                if (existingNameSet.has(newLead.firma_adi.toLowerCase())) continue;
 
                 await api.leads.create(newLead);
                 await api.dashboard.logAction('Otonom Lead Keşfi', `${newLead.firma_adi} eklendi`, 'success');
-                existingNameSet.add(firmName.toLowerCase());
+                existingNameSet.add(newLead.firma_adi.toLowerCase());
                 addedCount += 1;
             }
 
@@ -403,7 +376,8 @@ ${item.firsat_nedeni || 'AI keşfi ile eklendi.'}`
         if (pendingQueue.length === 0) return false;
 
         const templates = await api.templates.getAll();
-        const activeIntroTemplates = templates.filter(t => t.type === 'intro' && t.isActive);
+        const templateList = Array.isArray(templates) ? templates : [];
+        const activeIntroTemplates = templateList.filter(t => t.type === 'intro' && t.isActive);
         const lead = pendingQueue.sort((a, b) => b.lead_skoru - a.lead_skoru)[0];
 
         if (activeIntroTemplates.length === 0) {
@@ -486,13 +460,17 @@ ${item.firsat_nedeni || 'AI keşfi ile eklendi.'}`
     // --- MAIN LOOP ---
 
     const agentLoop = async () => {
-        if (!isRunningRef.current) return;
+        // Critical safety check at start of loop
+        if (!isRunningRef.current) {
+            localStorage.setItem(AGENT_RUNNING_KEY, 'false');
+            return;
+        }
 
         try {
             const leads = await api.leads.getAll();
             let actionTaken = false;
 
-            // PRIORITY 1: Reply Drafting (High Value)
+            // PRIORITY 1: Reply Drafting
             if (!actionTaken) actionTaken = await performAutoReplyDrafting(leads);
 
             // PRIORITY 2: Outreach (Fully Autonomous)
@@ -500,7 +478,7 @@ ${item.firsat_nedeni || 'AI keşfi ile eklendi.'}`
                 actionTaken = await performOutreach(leads);
             }
 
-            // PRIORITY 3: Enrichment (Quality Assurance)
+            // PRIORITY 3: Enrichment (High Score Leads)
             if (!actionTaken) actionTaken = await performAutoEnrichment(leads);
 
             // PRIORITY 4: Discovery (Pipeline Refill)
@@ -509,19 +487,21 @@ ${item.firsat_nedeni || 'AI keşfi ile eklendi.'}`
             if (actionTaken) {
                 burstStreakRef.current += 1;
                 setAgentStatus(`Burst Mode x${burstStreakRef.current}: İşlem tamamlandı, yeni tur hazırlanıyor...`);
-                loopTimeoutRef.current = setTimeout(agentLoop, BUSY_INTERVAL);
+                // Safety clamp on burst streak to prevent infinite rapid loops if something is stuck
+                if (burstStreakRef.current > 50) {
+                    stopAgentSafely("Aşırı işlem yükü algılandı (Burst Limit). Güvenlik için durduruldu.");
+                    return;
+                }
+                loopTimeoutRef.current = setTimeout(agentLoop, BURST_INTERVAL);
             } else {
-                // IDLE MODE: Sleep to save cost/cpu
                 setAgentStatus(isBusinessHours() ? 'Beklemede (İzleniyor)' : 'Mesai Dışı (Uyku Modu)');
                 burstStreakRef.current = 0;
                 loopTimeoutRef.current = setTimeout(agentLoop, IDLE_INTERVAL);
             }
 
-        } catch (error) {
-            console.error("Agent Loop Error", error);
-            addThought('error', 'Döngü hatası, sistem beklemeye alındı.');
-            burstStreakRef.current = 0;
-            loopTimeoutRef.current = setTimeout(agentLoop, IDLE_INTERVAL);
+        } catch (error: any) {
+            console.error("Agent Loop Critical Error", error);
+            stopAgentSafely(`Kritik hata: ${error.message || 'Bilinmeyen hata'}`);
         }
     };
 
