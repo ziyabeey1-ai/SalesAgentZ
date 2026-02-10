@@ -141,7 +141,7 @@ export const api = {
                             lead_durumu: 'aktif',
                             lead_skoru: item.web_sitesi_durumu === 'Kötü' ? 4 : 3,
                             eksik_alanlar: [],
-                            son_kontakt_tarihi: new Date().toISOString().slice(0, 10),
+                            // FIX: Do not set son_kontakt_tarihi immediately so outreach can pick it up
                             notlar: `[Otonom Keşif]: ${item.firsat_nedeni || 'Otomatik eklendi'}`
                         });
                     }
