@@ -74,7 +74,10 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             setIsAgentRunning(true);
             localStorage.setItem(AGENT_RUNNING_KEY, 'true');
             setAgentStatus('Başlatılıyor...');
-            addThought('info', 'Otopilot oturumu geri yüklendi.');
+            if (sessionStorage.getItem('agentRestoreNotified') !== 'true') {
+                addThought('info', 'Otopilot oturumu geri yüklendi.');
+                sessionStorage.setItem('agentRestoreNotified', 'true');
+            }
             setTimeout(agentLoop, 1000); // Increased initial delay to prevent race condition on load
         }
 
@@ -136,6 +139,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             setIsAgentRunning(false);
             localStorage.setItem(AGENT_RUNNING_KEY, 'false');
             setAgentStatus('Durduruldu');
+            sessionStorage.removeItem('agentRestoreNotified');
             addThought('info', 'Otopilot kullanıcı tarafından durduruldu.');
             if (loopTimeoutRef.current) clearTimeout(loopTimeoutRef.current);
         } else {
@@ -195,12 +199,23 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return hour >= 9 && hour < 18;
     };
 
+    const isFollowupDue = (lead: Lead): boolean => {
+        if (!lead.son_kontakt_tarihi) return true;
+        const lastContact = new Date(lead.son_kontakt_tarihi);
+        if (Number.isNaN(lastContact.getTime())) return true;
+        const now = new Date();
+        const diffMs = now.getTime() - lastContact.getTime();
+        const diffDays = diffMs / (1000 * 60 * 60 * 24);
+        return diffDays >= 1;
+    };
+
     // --- ACTIONS ---
 
     const performAutoReplyDrafting = async (leads: Lead[]): Promise<boolean> => {
         const targets = leads.filter(l => 
             (l.lead_durumu === 'takipte' || l.lead_durumu === 'teklif_gonderildi') &&
-            !l.draftResponse
+            !l.draftResponse && 
+            isFollowupDue(l)
         );
         
         if (targets.length === 0) return false;
