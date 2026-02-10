@@ -31,7 +31,7 @@ const AgentContext = createContext<AgentContextType | undefined>(undefined);
 
 const AGENT_MODEL = 'gemini-3-flash-preview';
 const BURST_INTERVAL = 2000; // Fast burst
-const IDLE_INTERVAL = 3000; // Reduced idle time to 3s to keep terminal alive
+const IDLE_INTERVAL = 5000; // Slower idle to save resources
 const MIN_ACTIVE_LEADS = 8;
 const MIN_ENRICHMENT_SCORE = 3;
 const AGENT_RUNNING_KEY = 'agentRunning';
@@ -61,6 +61,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const configRef = useRef(agentConfig);
     const isRunningRef = useRef(isAgentRunning);
     const enrichmentRetryRef = useRef<Record<string, { attempts: number; nextRetryAt: number }>>({});
+    const outreachRetryRef = useRef<Record<string, { attempts: number; nextRetryAt: number }>>({});
     const loopTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const burstStreakRef = useRef(0);
 
@@ -216,19 +217,10 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
     };
 
-    const isBusinessHours = (): boolean => {
-        // DEMO MODU: Her zaman açık (Gece vardiyası kısıtlaması kaldırıldı)
-        // Kullanıcı testi için 7/24 aktif çalışır.
-        return true;
-        
-        /* Orijinal Mesai Mantığı (Production için açılabilir)
-        const now = new Date();
-        const hour = now.getHours();
-        const day = now.getDay();
-        // Cumartesi Pazar da çalışmasın
-        if (day === 0 || day === 6) return false;
-        return hour >= 9 && hour < 18;
-        */
+    const getErrorMessage = (error: unknown): string => {
+        if (error instanceof Error) return error.message;
+        if (typeof error === 'string') return error;
+        return 'Bilinmeyen hata';
     };
 
     const isFollowupDue = (lead: Lead): boolean => {
@@ -441,8 +433,8 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             return false;
         }
 
-        // INCREASED LIMIT: Allow pipeline to hold more leads (up to 50) before stopping discovery
-        if (totalActive > 50) {
+        // INCREASED LIMIT: Allow pipeline to hold more leads (up to 100) before stopping discovery
+        if (totalActive > 100) {
             // Wait silently without notification spam
             return false;
         }
@@ -497,7 +489,13 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     const performOutreach = async (leads: Lead[]) => {
-        const pendingQueue = leads.filter(l => isProspectLead(l) && l.email && !l.son_kontakt_tarihi);
+        const now = Date.now();
+        const pendingQueue = leads
+            .filter(l => isProspectLead(l) && l.email && !l.son_kontakt_tarihi)
+            .filter((lead) => {
+                const retryState = outreachRetryRef.current[lead.id];
+                return !retryState || retryState.nextRetryAt <= now;
+            });
         if (pendingQueue.length === 0) return false;
 
         const templates = await api.templates.getAll();
@@ -523,6 +521,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                     lead_durumu: 'takipte',
                     son_kontakt_tarihi: new Date().toISOString().slice(0, 10)
                 });
+                delete outreachRetryRef.current[lead.id];
                 await api.dashboard.logAction('Otomatik Outreach', `${lead.firma_adi} için AI üretimli intro mail gönderildi.`, 'success');
                 
                 if (response._status === 'mock') {
@@ -595,6 +594,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 son_kontakt_tarihi: new Date().toISOString().slice(0, 10),
                 lastUsedTemplateId: bestTemplate.id
             });
+            delete outreachRetryRef.current[lead.id];
             await api.dashboard.logAction('Otomatik Outreach', `${lead.firma_adi} için intro mail gönderildi.`, 'success');
             
             if (response._status === 'mock') {
@@ -605,7 +605,35 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             return true;
         } catch (e) {
             console.error('Outreach error', e);
-            addThought('error', `${lead.firma_adi} için outreach gönderimi başarısız.`);
+            const errorMessage = getErrorMessage(e);
+            const isPermanentRecipientError =
+                errorMessage.includes('ALICI_EMAIL_GECERSIZ') ||
+                errorMessage.includes('ALICI_DOMAIN_FORMAT_GECERSIZ') ||
+                errorMessage.includes('ALICI_DOMAIN_DNS_HATASI') ||
+                errorMessage.includes('ALICI_WEBSITE_ERISILEMIYOR');
+
+            if (isPermanentRecipientError) {
+                const updatedNotes = `${lead.notlar || ''}\n[Sistem]: Outreach başarısız. Geçersiz alıcı domain/email (${errorMessage}).`.trim();
+                await api.leads.update({
+                    ...lead,
+                    lead_durumu: 'gecersiz',
+                    notlar: updatedNotes
+                });
+                delete outreachRetryRef.current[lead.id];
+                addThought('warning', `${lead.firma_adi} için geçersiz alıcı tespit edildi, lead arşivlendi.`);
+                return true;
+            }
+
+            const currentState = outreachRetryRef.current[lead.id] || { attempts: 0, nextRetryAt: 0 };
+            const attempts = currentState.attempts + 1;
+            const retryDelayMs = Math.min(15 * 60 * 1000, 30 * 1000 * Math.pow(2, attempts - 1));
+            outreachRetryRef.current[lead.id] = {
+                attempts,
+                nextRetryAt: Date.now() + retryDelayMs
+            };
+
+            const retryInSec = Math.round(retryDelayMs / 1000);
+            addThought('error', `${lead.firma_adi} için outreach gönderimi başarısız (Deneme ${attempts}). ${retryInSec}s sonra tekrar denenecek.`);
             return false;
         }
     };
@@ -622,8 +650,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         try {
             const leads = await api.leads.getAll();
             let actionTaken = false;
-            const isDaytime = isBusinessHours();
-
+            
             // --- PRIORITY 1: MAINTENANCE & CLEANUP (Safe 24/7, FREE) ---
             if (!actionTaken) actionTaken = await performLeadSanitization(leads);
 
@@ -636,14 +663,9 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             if (!actionTaken) actionTaken = await performSmartDiscovery(leads);
 
             // --- PRIORITY 4: ACTIVE COMMUNICATION (Now 24/7 Enabled) ---
-            if (isDaytime) {
-                if (!actionTaken) actionTaken = await performAutoReplyDrafting(leads, false); // Send allowed
-                if (!actionTaken) actionTaken = await performOutreach(leads);
-            } else {
-                // If isDaytime logic was kept, this would be Night Mode (Draft only)
-                // But with isBusinessHours returning true, this block is unreachable in default setup.
-                if (!actionTaken) actionTaken = await performAutoReplyDrafting(leads, true); 
-            }
+            // Removed isDaytime check to ensure 24/7 operation
+            if (!actionTaken) actionTaken = await performAutoReplyDrafting(leads, false); // Send allowed
+            if (!actionTaken) actionTaken = await performOutreach(leads);
 
             if (actionTaken) {
                 burstStreakRef.current += 1;
@@ -666,7 +688,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 setAgentStatus(`Aktif İşlem (x${burstStreakRef.current})...`);
                 loopTimeoutRef.current = setTimeout(agentLoop, BURST_INTERVAL);
             } else {
-                setAgentStatus('Beklemede (Taranıyor)...');
+                setAgentStatus('Beklemede (İşlem Kuyruğu Taranıyor)...');
                 burstStreakRef.current = 0;
                 // Fast recovery loop to check for new tasks
                 loopTimeoutRef.current = setTimeout(agentLoop, IDLE_INTERVAL);
