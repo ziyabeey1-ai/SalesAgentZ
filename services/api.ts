@@ -8,6 +8,7 @@ import { gamificationService } from './gamificationService';
 import { learningService } from './learningService';
 import { GoogleGenAI, Modality } from "@google/genai";
 import { decodeAudioData, playAudioBuffer, base64ToArrayBuffer } from '../utils/audioUtils';
+import { SYSTEM_PROMPT } from '../constants';
 
 const getApiKey = () => process.env.API_KEY || localStorage.getItem('apiKey') || '';
 
@@ -68,6 +69,75 @@ export const api = {
             analysis
         };
         if (useSheets()) { await sheetsService.addInteraction(interaction); } else { storage.addInteraction(interaction); }
+    },
+    // NEW: Autonomous Discovery Method
+    discover: async (sector: string, district: string): Promise<Lead[]> => {
+        const ai = new GoogleGenAI({ apiKey: getApiKey() });
+        const prompt = `
+            SİSTEM ROLÜ: Otonom Lead Avcısı.
+            GÖREV: İstanbul, ${district} bölgesindeki "${sector}" sektöründe hizmet veren işletmeleri bul.
+            
+            KRİTERLER:
+            1. Sadece EMAIL adresi olanları getir (info@, iletisim@ vb.). Email yoksa listeye alma.
+            2. Web sitesi "Yok" veya "Eski" olanlara öncelik ver.
+            3. En az 3 adet firma bul.
+
+            JSON ÇIKTI FORMATI:
+            {
+              "leads": [
+                {
+                  "firma_adi": "...",
+                  "adres": "...",
+                  "telefon": "...",
+                  "email": "...", 
+                  "web_sitesi_durumu": "Var/Yok/Kötü",
+                  "firsat_nedeni": "..."
+                }
+              ]
+            }
+        `;
+
+        try {
+            const result = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: prompt,
+                config: {
+                    systemInstruction: SYSTEM_PROMPT + " Sadece JSON döndür. Yorum yapma.",
+                    tools: [{ googleSearch: {} }],
+                    responseMimeType: 'application/json'
+                }
+            });
+            
+            const data = parseGeminiJson(result.text || '{}');
+            const foundLeads: Lead[] = [];
+
+            if (data.leads && Array.isArray(data.leads)) {
+                for (const item of data.leads) {
+                    if (item.email && item.email.includes('@')) {
+                        foundLeads.push({
+                            id: Math.random().toString(36).substr(2, 9),
+                            firma_adi: item.firma_adi,
+                            sektor: sector,
+                            ilce: district,
+                            adres: item.adres,
+                            telefon: item.telefon || '',
+                            email: item.email,
+                            kaynak: 'AI Asistan',
+                            websitesi_var_mi: item.web_sitesi_durumu === 'Yok' ? 'Hayır' : 'Evet',
+                            lead_durumu: 'aktif',
+                            lead_skoru: item.web_sitesi_durumu === 'Kötü' ? 4 : 3,
+                            eksik_alanlar: [],
+                            son_kontakt_tarihi: new Date().toISOString().slice(0, 10),
+                            notlar: `[Otonom Keşif]: ${item.firsat_nedeni}`
+                        });
+                    }
+                }
+            }
+            return foundLeads;
+        } catch (e) {
+            console.error("Auto Discovery Failed", e);
+            return [];
+        }
     }
   },
   gmail: {

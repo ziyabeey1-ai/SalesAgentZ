@@ -1,7 +1,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { GoogleGenAI } from "@google/genai";
-import { Lead, AgentThought, AgentConfig } from '../types';
+import { Lead, AgentThought, AgentConfig, EmailTemplate } from '../types';
 import { api } from '../services/api';
 import { storage } from '../services/storage';
 
@@ -29,8 +29,9 @@ interface AgentContextType {
 const AgentContext = createContext<AgentContextType | undefined>(undefined);
 
 const AGENT_MODEL = 'gemini-3-flash-preview';
-// OPTIMIZATION: Loop interval increased to 2 minutes to save costs
-const CYCLE_INTERVAL = 120000; 
+// OPTIMIZATION: Adaptive timing constants
+const IDLE_INTERVAL = 60000; // 60 sec when nothing is happening
+const BUSY_INTERVAL = 5000;  // 5 sec when acting ("Burst Mode")
 const MIN_ACTIVE_LEADS = 8;
 const MIN_ENRICHMENT_SCORE = 3;
 
@@ -290,25 +291,94 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         if (!checkAndIncrementCost()) return false;
 
+        const { targetDistrict, targetSector } = configRef.current;
+        const searchDistrict = targetDistrict === 'Tümü' ? 'Kadıköy' : targetDistrict; // Default fallback
+        const searchSector = targetSector === 'Tümü' ? 'Restoran' : targetSector;
+
         setAgentStatus('Yeni fırsatlar keşfediliyor...');
-        addThought('action', 'Lead sayısı azaldı, yeni potansiyel müşteriler aranıyor.');
+        addThought('action', `Lead sayısı kritik seviyenin altında. ${searchDistrict} bölgesinde ${searchSector} araması başlatılıyor.`);
         
-        // NOTE: In a real scenario, this would trigger the LeadDiscoveryModal logic automatically.
-        // For this context, we'll log a suggestion or trigger a specialized search if implemented.
-        addThought('info', 'Otomatik keşif simülasyonu: 3 yeni aday bulundu (Mock).');
-        return true;
+        try {
+            const newLeads = await api.leads.discover(searchSector, searchDistrict);
+            
+            if (newLeads.length > 0) {
+                for (const lead of newLeads) {
+                    await api.leads.create(lead);
+                }
+                addThought('success', `${newLeads.length} yeni lead başarıyla havuza eklendi!`);
+                return true;
+            } else {
+                addThought('warning', 'Keşif yapıldı ancak uygun kriterde lead bulunamadı.');
+            }
+        } catch (e) {
+            console.error("Discovery Loop Error", e);
+            addThought('error', 'Keşif sırasında hata oluştu.');
+        }
+        return true; // Return true to trigger fast loop retry or backoff logic
     };
 
-    const performOutreach = async (leads: Lead[]) => {
-        // Simple mock for outreach - checking if we need to send initial mails
-        // In reality, this connects to MailAutomation queue logic
+    const performOutreach = async (leads: Lead[]): Promise<boolean> => {
+        // Find leads ready for first contact: Active, Has Email, No Contact Date
         const pendingQueue = leads.filter(l => l.lead_durumu === 'aktif' && l.email && !l.son_kontakt_tarihi);
-        if (pendingQueue.length > 0) {
-            // Usually handled by MailAutomation, but agent can flag it
-            addThought('info', `${pendingQueue.length} adet lead için mail gönderimi bekleniyor.`);
-            return false; // Action not fully autonomous yet to prevent spam in demo
+        
+        if (pendingQueue.length === 0) return false;
+        
+        const target = pendingQueue[0]; // Process one at a time to mimic human pace but fast
+        if (!checkAndIncrementCost()) return false;
+
+        setAgentStatus(`Mail Gönderiliyor: ${target.firma_adi}`);
+        addThought('action', `${target.firma_adi} için tanışma maili hazırlanıyor.`);
+
+        try {
+            // 1. Select Template
+            const templates = await api.templates.getAll();
+            const introTemplate = templates.find(t => t.type === 'intro' && t.isActive) || templates[0];
+            
+            if (!introTemplate) {
+                addThought('warning', 'Aktif şablon bulunamadı. Gönderim iptal.');
+                return false;
+            }
+
+            // 2. Prepare Content
+            let subject = introTemplate.subject;
+            let body = introTemplate.body;
+            const replacements: Record<string, string> = {
+                '{firma_adi}': target.firma_adi,
+                '{yetkili}': target.yetkili_adi || 'Yetkili',
+                '{ilce}': target.ilce,
+                '{sektor}': target.sektor,
+                '{aksiyon_cagrisi}': 'Sizinle tanışmak isterim.',
+                '{sektor_ozel_mesaj}': 'Sektörünüzde dijitalleşme çok önemli.'
+            };
+
+            Object.keys(replacements).forEach(key => {
+                subject = subject.replace(new RegExp(key, 'g'), replacements[key]);
+                body = body.replace(new RegExp(key, 'g'), replacements[key]);
+            });
+
+            // 3. Send via API (Mock or Real)
+            await api.gmail.send(target.email, subject, body);
+
+            // 4. Update Lead Status
+            const updatedLead = { 
+                ...target, 
+                lead_durumu: 'takipte' as const, 
+                son_kontakt_tarihi: new Date().toISOString().slice(0, 10),
+                lastUsedTemplateId: introTemplate.id
+            };
+            await api.leads.update(updatedLead);
+            
+            // 5. Update Stats
+            await api.dashboard.logAction('Otonom Mail', `${target.firma_adi}`, 'success');
+            addThought('success', `${target.firma_adi} firmasına mail gönderildi.`);
+            
+            return true;
+
+        } catch (e) {
+            console.error("Outreach Error", e);
+            addThought('error', `${target.firma_adi} gönderimi başarısız oldu.`);
+            return false;
         }
-        return false;
     };
 
     // --- MAIN LOOP ---
@@ -320,35 +390,34 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             const leads = await api.leads.getAll();
             let actionTaken = false;
 
-            // PRIORITY 1: Reply Drafting
+            // PRIORITY 1: Reply Drafting (High Value)
             if (!actionTaken) actionTaken = await performAutoReplyDrafting(leads);
 
-            // PRIORITY 2: Outreach (Business Hours Only)
+            // PRIORITY 2: Outreach (Business Hours Only - Revenue Driver)
             if (!actionTaken && isBusinessHours()) {
-                // Check if we have leads ready for contact
                 actionTaken = await performOutreach(leads);
             }
 
-            // PRIORITY 3: Enrichment (High Score Leads)
+            // PRIORITY 3: Enrichment (Quality Assurance)
             if (!actionTaken) actionTaken = await performAutoEnrichment(leads);
 
-            // PRIORITY 4: Discovery (Refilling Pipeline)
+            // PRIORITY 4: Discovery (Pipeline Refill)
             if (!actionTaken) actionTaken = await performSmartDiscovery(leads);
 
             if (actionTaken) {
-                setAgentStatus('İşlem tamamlandı, dinleniyor...');
-                // If action taken, run again sooner but not immediately
-                loopTimeoutRef.current = setTimeout(agentLoop, 15000); 
+                // BURST MODE: If we did something, do the next thing fast!
+                setAgentStatus('Meşgul (Burst Mode)');
+                loopTimeoutRef.current = setTimeout(agentLoop, BUSY_INTERVAL); 
             } else {
+                // IDLE MODE: Sleep to save cost/cpu
                 setAgentStatus(isBusinessHours() ? 'Beklemede (İzleniyor)' : 'Mesai Dışı (Uyku Modu)');
-                // If no action needed, sleep for full cycle
-                loopTimeoutRef.current = setTimeout(agentLoop, CYCLE_INTERVAL);
+                loopTimeoutRef.current = setTimeout(agentLoop, IDLE_INTERVAL);
             }
 
         } catch (error) {
             console.error("Agent Loop Error", error);
             addThought('error', 'Döngü hatası, sistem beklemeye alındı.');
-            loopTimeoutRef.current = setTimeout(agentLoop, CYCLE_INTERVAL);
+            loopTimeoutRef.current = setTimeout(agentLoop, IDLE_INTERVAL);
         }
     };
 
