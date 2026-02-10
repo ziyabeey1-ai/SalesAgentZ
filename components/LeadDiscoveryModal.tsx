@@ -25,6 +25,10 @@ interface DiscoveredLead {
   selected: boolean;
   kaynaklar?: string[]; 
   dogrulama_skoru?: number;
+  instagram_url?: string;
+  google_maps_url?: string;
+  maps_dogrulandi?: boolean;
+  instagram_dogrulandi?: boolean;
 }
 
 interface ValidationReport {
@@ -45,6 +49,10 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
   const [validationReport, setValidationReport] = useState<ValidationReport | null>(null);
   const [step, setStep] = useState<'criteria' | 'results'>('criteria');
   const [importing, setImporting] = useState(false);
+  
+  // Patch: New Filters
+  const [requireInstagramProfile, setRequireInstagramProfile] = useState(false);
+  const [requireGoogleMapsSource, setRequireGoogleMapsSource] = useState(true);
 
   const getApiKey = () => process.env.API_KEY || localStorage.getItem('apiKey') || '';
 
@@ -65,10 +73,34 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
               "firsat_nedeni": "...",
               "puan": "4.5",
               "yorum_sayisi": "50",
-              "competitor_insight": "Rakibi X firması Ads veriyor ama bu firma haritada bile yok."
+              "competitor_insight": "Rakibi X firması Ads veriyor ama bu firma haritada bile yok.",
+              "instagram_url": "https://www.instagram.com/firma",
+              "google_maps_url": "https://maps.google.com/...",
+              "maps_dogrulandi": true,
+              "instagram_dogrulandi": false,
+              "dogrulama_skoru": 87
             }
           ]
         }
+      `;
+
+      // Patch: Added Quality Rules
+      const leadQualityRules = `
+        KALİTE KURALLARI:
+        - Email formatı gerçek ve kurumsal olmalı.
+        - Telefon numarası mümkünse işletmenin aktif iletişim numarası olmalı.
+        - maps_dogrulandi alanı, Google Maps kaynağı ile eşleştiyse true olmalı.
+        - instagram_dogrulandi alanı, profil aktif ve firmayla ilişkiliyse true olmalı.
+      `;
+
+      const sourceRules = `
+        KAYNAK ODAĞI:
+        - Google Maps URL'si bulabilirsen google_maps_url doldur.
+        - Instagram profili bulabilirsen instagram_url doldur.
+        - requireGoogleMapsSource=${requireGoogleMapsSource ? 'true' : 'false'}
+        - requireInstagramProfile=${requireInstagramProfile ? 'true' : 'false'}
+        ${requireGoogleMapsSource ? '- KRİTİK: Google Maps kaynağı yoksa lead listeye girmez.' : ''}
+        ${requireInstagramProfile ? '- KRİTİK: Instagram profili yoksa lead listeye girmez.' : ''}
       `;
 
       if (searchMode === 'competitor_gap') {
@@ -88,6 +120,8 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
 
             ÇIKTIDA "firsat_nedeni" kısmına şunu yaz: "Rakibi [Lider Firma] çok güçlü, bu firma dijitalde yok oluyor."
             ${emailRule}
+            ${leadQualityRules}
+            ${sourceRules}
             ${jsonFormat}
           `;
       } else if (searchMode === 'trigger_event') {
@@ -96,6 +130,8 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
             GÖREV: ${sector}, ${district} bölgesinde son 6 ayda "Tetikleyici Olay" yaşayan firmaları bul.
             TETİKLEYİCİLER: Yeni Açılış, Tabelası Değişenler, "Devren Kiralık"tan yeni çıkanlar, Tadilat yapanlar.
             ${emailRule}
+            ${leadQualityRules}
+            ${sourceRules}
             ${jsonFormat}
           `;
       } else if (searchMode === 'validated') {
@@ -103,6 +139,8 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
             SİSTEM ROLÜ: B2B Validasyon Uzmanı.
             GÖREV: ${district} bölgesinde ${sector} sektöründe 3 farklı kaynaktan (Maps, Instagram, Rehber) doğrulanan firmalar.
             ${emailRule}
+            ${leadQualityRules}
+            ${sourceRules}
             ${jsonFormat}
           `;
       } else {
@@ -110,9 +148,36 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
             ${baseInfo}
             HEDEF: ${searchMode === 'bad_site' ? 'Web sitesi eski/hatalı olanlar' : 'Web sitesi hiç olmayanlar'}.
             ${emailRule}
+            ${leadQualityRules}
+            ${sourceRules}
             ${jsonFormat}
           `;
       }
+  };
+
+  // Patch: Validation Helpers
+  const hasUsableInstagramProfile = (value?: string) => {
+      if (!value) return false;
+      const normalized = value.trim().toLowerCase();
+      return normalized.includes('instagram.com/') && !normalized.includes('/reel/') && !normalized.includes('/p/');
+  };
+
+  const hasUsableMapsUrl = (value?: string) => {
+      if (!value) return false;
+      const normalized = value.trim().toLowerCase();
+      return normalized.includes('maps.google') || normalized.includes('goo.gl/maps') || normalized.includes('g.page');
+  };
+
+  const calculateFinalValidationScore = (lead: any) => {
+      let score = Number(lead.dogrulama_skoru || 0);
+      if (Number.isNaN(score)) score = 0;
+
+      if (lead.maps_dogrulandi || hasUsableMapsUrl(lead.google_maps_url)) score += 25;
+      if (lead.instagram_dogrulandi || hasUsableInstagramProfile(lead.instagram_url)) score += 15;
+      if (lead.email && lead.email.includes('@')) score += 20;
+      if (lead.telefon) score += 10;
+
+      return Math.max(0, Math.min(100, score));
   };
 
   const handleSearch = async () => {
@@ -152,12 +217,14 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
         }
 
         if (Array.isArray(data) && data.length > 0) {
-            // Strict Filtering
+            // Strict Filtering based on Patch checkboxes
             const validLeads = data.filter((item: any) => 
                 item.email && 
                 item.email.includes('@') && 
                 !item.email.includes('null') &&
-                !item.email.includes('ornek')
+                !item.email.includes('ornek') &&
+                (!requireGoogleMapsSource || item.maps_dogrulandi || hasUsableMapsUrl(item.google_maps_url)) &&
+                (!requireInstagramProfile || item.instagram_dogrulandi || hasUsableInstagramProfile(item.instagram_url))
             );
 
             const mappedResults: DiscoveredLead[] = validLeads.map((item: any, index: number) => {
@@ -178,7 +245,12 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
                     puan: item.puan || '0',
                     yorum_sayisi: item.yorum_sayisi || '0',
                     kaynaklar: item.kaynaklar,
-                    dogrulama_skoru: item.dogrulama_skoru,
+                    // Patch: Validation fields
+                    dogrulama_skoru: calculateFinalValidationScore(item),
+                    instagram_url: item.instagram_url,
+                    google_maps_url: item.google_maps_url,
+                    maps_dogrulandi: Boolean(item.maps_dogrulandi || hasUsableMapsUrl(item.google_maps_url)),
+                    instagram_dogrulandi: Boolean(item.instagram_dogrulandi || hasUsableInstagramProfile(item.instagram_url)),
                     selected: true
                 };
             });
@@ -186,7 +258,7 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
             setStep('results');
             
             if (mappedResults.length === 0) {
-                alert("Arama yapıldı ancak 'Email Zorunluluğu' kriterine uyan firma bulunamadı. Lütfen bölgeyi değiştirin.");
+                alert("Arama yapıldı ancak kriterlere (Email/Maps/Instagram) uyan firma bulunamadı. Lütfen filtreleri gevşetin.");
             }
         } else {
             alert("Sonuç bulunamadı.");
@@ -225,7 +297,8 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
                   lead_skoru: item.web_sitesi_durumu === 'Kötü' ? 4 : (item.web_sitesi_durumu === 'Yok' ? 3 : 2),
                   eksik_alanlar: item.email ? (item.telefon ? [] : ['telefon']) : ['email'], 
                   son_kontakt_tarihi: new Date().toISOString().slice(0, 10),
-                  notlar: `[Otomatik Keşif]\nMod: ${searchMode}\nAnaliz: ${item.firsat_nedeni}`
+                  // Patch: Improved notes with verification details
+                  notlar: `[Otomatik Keşif]\nMod: ${searchMode}\nAnaliz: ${item.firsat_nedeni}\nDoğrulama Skoru: ${item.dogrulama_skoru || 0}/100\nMaps: ${item.google_maps_url || 'Yok'}\nInstagram: ${item.instagram_url || 'Yok'}`
               };
               
               if (item.email) newLead.lead_skoru += 1;
@@ -340,6 +413,35 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
                             </div>
                         </div>
 
+                        {/* Patch: Checkbox Filters */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <label className="flex items-center gap-3 p-3 rounded-lg border border-slate-200 bg-slate-50 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={requireGoogleMapsSource}
+                                    onChange={(e) => setRequireGoogleMapsSource(e.target.checked)}
+                                    className="accent-indigo-600"
+                                />
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-800">Google Maps kaynağı zorunlu</p>
+                                    <p className="text-xs text-slate-500">Harita linki veya Maps doğrulama sinyali olmayan leadler elenir.</p>
+                                </div>
+                            </label>
+
+                            <label className="flex items-center gap-3 p-3 rounded-lg border border-slate-200 bg-slate-50 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={requireInstagramProfile}
+                                    onChange={(e) => setRequireInstagramProfile(e.target.checked)}
+                                    className="accent-indigo-600"
+                                />
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-800">Instagram profili zorunlu</p>
+                                    <p className="text-xs text-slate-500">Özellikle B2C sektörlerinde sosyal varlığı olan adaylara odaklanır.</p>
+                                </div>
+                            </label>
+                        </div>
+
                         <div className="bg-amber-50 p-4 rounded-lg border border-amber-100 flex gap-3 text-xs text-amber-800">
                             <AlertCircle size={20} className="flex-shrink-0" />
                             <div>
@@ -373,6 +475,8 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
                                     <th className="px-6 py-4">Firma</th>
                                     <th className="px-6 py-4">Fırsat / İçgörü</th>
                                     <th className="px-6 py-4">İletişim (Email)</th>
+                                    {/* Patch: New Validation Column */}
+                                    <th className="px-6 py-4">Doğrulama</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -395,6 +499,18 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
                                         <td className="px-6 py-4">
                                             <div className="text-indigo-600 font-mono text-xs">{item.email}</div>
                                             <div className="text-slate-500 text-xs">{item.telefon}</div>
+                                        </td>
+                                        {/* Patch: Badges Cell */}
+                                        <td className="px-6 py-4 text-xs">
+                                            <div className="font-bold text-slate-700">{item.dogrulama_skoru || 0}/100</div>
+                                            <div className="mt-1 flex flex-col gap-1">
+                                                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] ${item.maps_dogrulandi ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                                                    Maps {item.maps_dogrulandi ? '✓' : '—'}
+                                                </span>
+                                                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] ${item.instagram_dogrulandi ? 'bg-pink-100 text-pink-700' : 'bg-slate-100 text-slate-500'}`}>
+                                                    Instagram {item.instagram_dogrulandi ? '✓' : '—'}
+                                                </span>
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}

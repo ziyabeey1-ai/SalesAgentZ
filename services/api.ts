@@ -387,45 +387,57 @@ export const api = {
           let personaContext = "";
           if (lead.personaAnalysis) {
               personaContext = `
-                ALICI PROFİLİ: 
-                - Tip: ${lead.personaAnalysis.type}
-                - İletişim Tarzı: ${lead.personaAnalysis.communicationStyle}
+                ALICI PROFİLİ (NÖRO-PAZARLAMA): 
+                - Kişilik Tipi: ${lead.personaAnalysis.type}
+                - İletişim Tarzı: ${lead.personaAnalysis.communicationStyle} (Buna kesinlikle uy)
                 - Dikkat Edilecekler: ${lead.personaAnalysis.traits.join(', ')}.
               `;
           } else {
-              personaContext = "Alıcı profili bilinmiyor, genel ve profesyonel bir dil kullan.";
+              personaContext = "Alıcı profili net değil, ancak sektör dinamiklerine uygun, profesyonel ama samimi bir dil kullan.";
           }
 
           const senderContext = `
-            GÖNDEREN KİMLİĞİ (SEN BU KİŞİSİN):
-            Ad Soyad: ${userProfile.fullName || 'Satış Temsilcisi'}
+            GÖNDEREN KİMLİĞİ (SEN):
+            Ad: ${userProfile.fullName || 'Satış Uzmanı'}
             Şirket: ${userProfile.companyName || 'Ajansımız'}
-            Unvan: ${userProfile.role || 'Danışman'}
-            Ton: ${userProfile.tone || 'Profesyonel'}
-            Web Sitesi: ${userProfile.website || ''}
+            Rol: ${userProfile.role || 'Danışman'}
+            İletişim Tonu: ${userProfile.tone || 'Profesyonel'}
           `;
 
+          // --- DEEP CONTEXT INJECTION ---
+          const weakness = lead.scoreDetails?.digitalWeaknesses?.[0] || lead.digitalWeakness || "dijital görünürlük eksikliği";
+          const leadScore = lead.scoreDetails?.finalLeadScore || lead.lead_skoru || 3;
+          const competitorInsight = lead.competitorAnalysis?.summary 
+              ? `Rakip Durumu: ${lead.competitorAnalysis.summary}` 
+              : `Rakip Durumu: ${lead.ilce} bölgesindeki rakipleri dijitalde aktif.`;
+
           const prompt = `
-            HEDEF (ALICI): ${lead.firma_adi} (${lead.sektor})
-            YETKİLİ ADI: ${lead.yetkili_adi || 'Yetkili'}
-            DURUM: ${lead.lead_durumu}
+            HEDEF FİRMA: "${lead.firma_adi}"
+            SEKTÖR: ${lead.sektor} | BÖLGE: ${lead.ilce}
+            YETKİLİ: ${lead.yetkili_adi || 'Sayın Yetkili'}
+            DİJİTAL DURUMU: ${lead.websitesi_var_mi === 'Hayır' ? 'Web Sitesi Yok' : 'Web Sitesi Var ama Yetersiz'}
+            TESPİT EDİLEN ZAYIFLIK: "${weakness}"
+            ${competitorInsight}
             
             ${senderContext}
-            
             ${personaContext}
             
-            GÖREV: ${lead.firma_adi} için etkileyici bir "Cold Email" (Tanışma Maili) gövdesi yaz.
+            GÖREV: ${lead.firma_adi} için %100 ÖZELLEŞTİRİLMİŞ, robotik olmayan, samimi ve zekice kurgulanmış bir "Cold Email" yaz.
             
-            ⚠️ KESİN KURALLAR:
-            1. Asla '[Adınız]', '[Şirket Adı]' gibi yer tutucular (placeholder) kullanma.
-            2. Yukarıdaki "GÖNDEREN KİMLİĞİ" bilgilerini kullanarak mailin içeriğini doldur.
-            3. ÖNEMLİ: Metnin en sonuna "Saygılarımla", "İsim Soyad" vb. SAKIN EKLEME. İmzayı sistem otomatik ekleyecek.
-            4. Sadece ana mesajı yaz.
-            5. Eğer alıcı yetkili adı bilinmiyorsa "Sayın Yetkili" diye başla.
-            6. Seçilen "Ton"a (${userProfile.tone}) uygun yaz.
+            STRATEJİ (PAS Modeli Uygula):
+            1. PROBLEM (Kanca): Direkt konuya gir. ${lead.ilce} bölgesinde ${lead.sektor} arayanların onları bulamadığını veya "${weakness}" sorununu nazikçe yüzlerine vur.
+            2. AGİTASYON (Derinleştirme): Rakiplerinin (${lead.competitorAnalysis?.competitors?.[0]?.name || 'rakipler'}) bu boşluğu doldurduğunu ve potansiyel ciro kaybettiklerini hissettir.
+            3. ÇÖZÜM (Değer): Bizim ${userProfile.companyName} olarak bunu nasıl hızlıca çözeceğimizi (teknik detaya boğmadan) anlat.
+            
+            ⚠️ KRİTİK KURALLAR:
+            - ASLA "Umarım iyisinizdir", "Ben X firmasından Y" gibi sıkıcı girişler yapma.
+            - Konu başlığı (Subject) merak uyandırıcı olmalı (Örn: "${lead.firma_adi} için ${lead.ilce} analizi", "Müşterileriniz sizi neden bulamıyor?").
+            - Metnin sonuna "Saygılarımla" veya imza EKLEME. (Sistem otomatik ekleyecek).
+            - Eğer alıcı "Analitik" biriyse verilerden bahset, "Sosyal" biriyse itibardan bahset.
+            - Kopyala-yapıştır gibi durmasın. Sanki şu an elle yazıyormuşsun gibi olsun.
 
             JSON FORMATINDA DÖNDÜR:
-            { "subject": "...", "body": "...", "cta": "...", "tone": "..." }
+            { "subject": "...", "body": "...", "cta": "Kısa ve net bir eylem çağrısı (Örn: Yarın 10dk konuşalım mı?)", "tone": "..." }
           `;
           
           try {
@@ -435,20 +447,20 @@ export const api = {
             result.subject = cleanAIResponse(result.subject, lead, userProfile);
             result.body = cleanAIResponse(result.body, lead, userProfile);
             
+            // Append signature manually if not present (logic handled in MailAutomation but good to ensure clean body)
             const signature = `\n\nSaygılarımla,\n\n${userProfile.fullName}\n${userProfile.role}\n${userProfile.companyName}\n${userProfile.website || ''}`;
             
-            if (!result.body.includes(userProfile.fullName)) {
-                result.body += signature;
-            }
+            // Only strictly append if using raw generation output directly, 
+            // but MailAutomation usually handles signature composition. 
+            // We return pure body here to let UI compose it.
             
             return result;
 
           } catch (e) {
             console.error("Cold Email Generation Failed", e);
-            const signature = `\n\nSaygılarımla,\n\n${userProfile.fullName}\n${userProfile.role}\n${userProfile.companyName}`;
             return { 
-                subject: `Merhaba ${lead.firma_adi}`, 
-                body: `Merhaba,\n\nBen ${userProfile.companyName}'den ${userProfile.fullName}. Sizinle dijital fırsatlar hakkında görüşmek isterim.${signature}`, 
+                subject: `Merhaba ${lead.firma_adi} - Dijital Fırsat`, 
+                body: `Merhaba,\n\n${lead.ilce} bölgesindeki işletmeleri incelerken firmanızı fark ettim. ${lead.sektor} sektöründe rakiplerinizin önüne geçmeniz için bazı fırsatlar gördüm.\n\nÖzellikle ${weakness} konusunda size destek olabiliriz.`, 
                 cta: "Görüşelim", 
                 tone: "Neutral" 
             };

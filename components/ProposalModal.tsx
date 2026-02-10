@@ -66,6 +66,11 @@ const ProposalModal: React.FC<ProposalModalProps> = ({ lead, isOpen, onClose, on
   const [proposalData, setProposalData] = useState<ProposalData | null>(null);
   const [emailSubject, setEmailSubject] = useState('');
   const [emailBody, setEmailBody] = useState('');
+  
+  // Patch: New personalization state
+  const [emailTone, setEmailTone] = useState<'Resmi' | 'Samimi' | 'Danisman'>('Danisman');
+  const [emailGoal, setEmailGoal] = useState<'Toplanti' | 'OnGorusme' | 'Demo'>('Toplanti');
+  const [customPersonalizationNote, setCustomPersonalizationNote] = useState('');
 
   const pagesRef = useRef<HTMLDivElement>(null);
   const userProfile = storage.getUserProfile();
@@ -78,6 +83,10 @@ const ProposalModal: React.FC<ProposalModalProps> = ({ lead, isOpen, onClose, on
     if (lead && isOpen) {
         setStep('config');
         setProposalData(null);
+        // Patch: Reset state on open
+        setCustomPersonalizationNote('');
+        setEmailTone('Danisman');
+        setEmailGoal('Toplanti');
         calculateInitialPrice(lead.sektor);
     }
   }, [lead, isOpen]);
@@ -104,7 +113,6 @@ const ProposalModal: React.FC<ProposalModalProps> = ({ lead, isOpen, onClose, on
     try {
         const ai = new GoogleGenAI({ apiKey: getApiKey() });
         
-        // PHASE 2 UPGRADE: Inject Deep Scoring Data
         let scoreContext = "";
         if (lead.scoreDetails) {
             scoreContext = `
@@ -131,6 +139,14 @@ const ProposalModal: React.FC<ProposalModalProps> = ({ lead, isOpen, onClose, on
             ? `Biz "${brandName}" adında bir ajansız. Kurumsal ve "BİZ" dili kullan.` 
             : `Ben "${brandName}" adında bir uzmanım (${userProfile.role}). Samimi, profesyonel ve "BEN" dili kullan.`;
 
+        // Patch: Personalization hints construction
+        const personalizationHints = [
+            lead.scoreDetails?.digitalWeaknesses?.[0] ? `Kritik Zayıflık: ${lead.scoreDetails.digitalWeaknesses[0]}` : null,
+            lead.competitorAnalysis?.summary ? `Rakip İçgörüsü: ${lead.competitorAnalysis.summary}` : null,
+            lead.instagramProfile?.recentPostTheme ? `Instagram Teması: ${lead.instagramProfile.recentPostTheme}` : null,
+            customPersonalizationNote ? `Satış Notu: ${customPersonalizationNote}` : null
+        ].filter(Boolean).join(' | ');
+
         const prompt = `
             GÖREV: "${lead.firma_adi}" (${lead.sektor}, ${lead.ilce}) için 5 sayfalık, hiper-kişiselleştirilmiş bir strateji raporu hazırla.
             
@@ -146,11 +162,19 @@ const ProposalModal: React.FC<ProposalModalProps> = ({ lead, isOpen, onClose, on
             - Eğer 'Tespit Edilen Zayıflıklar' varsa, bunları "Masada Bırakılan Para" bölümünde acı noktası (pain point) olarak işle.
             - Rakiplerin yaptığı ama müşterinin yapmadığı şeyleri vurgula (FOMO yarat).
             - "Teklif" kelimesini az kullan, "Dijital Büyüme Raporu" de.
+
+            MAİL KİŞİSELLEŞTİRME KURALLARI:
+            - Ton: ${emailTone}
+            - Ana hedef: ${emailGoal}
+            - İlk cümlede mutlaka firma adı (${lead.firma_adi}) geçsin.
+            - Mail gövdesinde en az 1 somut içgörü kullan: ${personalizationHints || 'Sektör ve bölge bazlı içgörü üret.'}
+            - Gövde 120-170 kelime, 3 kısa paragraf ve 1 net CTA içersin.
+            - Gereksiz genellemeler, klişe açılışlar ve yapay övgü kullanma.
             
             İSTENEN JSON FORMATI:
             {
                 "emailSubject": "🔥 ${lead.firma_adi} için Dijital Fırsat Analizi (Önemli)",
-                "emailBody": "Kısa, merak uyandıran ve PDF'i açmaya teşvik eden bir mail metni.",
+                "emailBody": "Kişiselleştirilmiş, 3 kısa paragraf içeren ve toplantı CTA'sı olan mail.",
                 "data": {
                     "cover": { 
                         "title": "Dijital Dönüşüm Yol Haritası", 
@@ -207,8 +231,8 @@ const ProposalModal: React.FC<ProposalModalProps> = ({ lead, isOpen, onClose, on
         };
 
         setProposalData(jsonRes.data);
-        setEmailSubject(jsonRes.emailSubject);
-        setEmailBody(jsonRes.emailBody);
+        setEmailSubject(jsonRes.emailSubject || `${lead.firma_adi} için kısa dijital büyüme raporu`);
+        setEmailBody(jsonRes.emailBody || `${lead.firma_adi} için hazırladığımız kısa raporu paylaşmak isterim.`);
         setStep('preview');
 
     } catch (error) {
@@ -359,6 +383,36 @@ const ProposalModal: React.FC<ProposalModalProps> = ({ lead, isOpen, onClose, on
                                         className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none font-bold text-slate-700"
                                     />
                                 </div>
+                            </div>
+
+                            {/* Patch: New Personalization Controls */}
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Mail Tonu</label>
+                                <select value={emailTone} onChange={(e) => setEmailTone(e.target.value as 'Resmi' | 'Samimi' | 'Danisman')} className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-sm">
+                                    <option value="Danisman">Danışman</option>
+                                    <option value="Resmi">Resmi</option>
+                                    <option value="Samimi">Samimi</option>
+                                </select>
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Mail Hedefi</label>
+                                <select value={emailGoal} onChange={(e) => setEmailGoal(e.target.value as 'Toplanti' | 'OnGorusme' | 'Demo')} className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-sm">
+                                    <option value="Toplanti">Toplantı randevusu</option>
+                                    <option value="OnGorusme">15 dk ön görüşme</option>
+                                    <option value="Demo">Kısa demo sunumu</option>
+                                </select>
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Ek Kişiselleştirme Notu</label>
+                                <textarea
+                                    value={customPersonalizationNote}
+                                    onChange={(e) => setCustomPersonalizationNote(e.target.value)}
+                                    rows={3}
+                                    placeholder="Örn: Son 3 ayda Instagram post sıklığı düşmüş, rezervasyon akışı zayıf."
+                                    className="w-full p-2 border border-slate-300 rounded text-sm resize-none"
+                                />
                             </div>
                         </>
                     ) : (
