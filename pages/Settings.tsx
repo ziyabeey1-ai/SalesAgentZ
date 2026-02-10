@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Save, Key, Sheet, Smartphone, ShieldCheck, Mail, Check, Loader2, LogIn, ExternalLink, Battery, AlertTriangle, UserCircle, Briefcase, Globe, Cloud, UploadCloud, Database, Calendar, MessageCircle, Package, Plus, Trash2, Wand2, Zap, DollarSign, Calculator, TrendingUp, Image as ImageIcon, X, Bot, Server } from 'lucide-react';
+import { Save, Key, Sheet, Smartphone, ShieldCheck, Mail, Check, Loader2, LogIn, ExternalLink, Battery, AlertTriangle, UserCircle, Briefcase, Globe, Cloud, UploadCloud, Database, Calendar, MessageCircle, Package, Plus, Trash2, Wand2, Zap, DollarSign, Calculator, TrendingUp, Image as ImageIcon, X, Bot, Server, CheckCircle, Wifi } from 'lucide-react';
 import { sheetsService } from '../services/googleSheetsService';
 import { firebaseService } from '../services/firebaseService';
 import { storage } from '../services/storage';
@@ -16,6 +16,10 @@ const Settings: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   
+  // Test Connection State
+  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [testMessage, setTestMessage] = useState('');
+
   // Migration State
   const [isMigrating, setIsMigrating] = useState(false);
   const [migrationStatus, setMigrationStatus] = useState('');
@@ -74,6 +78,30 @@ const Settings: React.FC = () => {
           ? e.target.value.trim() 
           : e.target.value;
       setSettings({ ...settings, [e.target.name]: value });
+      
+      // Reset test status when key changes
+      if (e.target.name === 'geminiApiKey') {
+          setTestStatus('idle');
+          setTestMessage('');
+      }
+  };
+
+  const handleTestConnection = async () => {
+      setTestStatus('testing');
+      setTestMessage('Bağlanıyor...');
+      try {
+          const result = await api.system.testApiKey(settings.geminiApiKey);
+          if (result.success) {
+              setTestStatus('success');
+              setTestMessage('Bağlantı Başarılı!');
+          } else {
+              setTestStatus('error');
+              setTestMessage(result.message);
+          }
+      } catch (e: any) {
+          setTestStatus('error');
+          setTestMessage(e.message || "Bilinmeyen Hata");
+      }
   };
 
   const handleProfileChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -447,17 +475,47 @@ const Settings: React.FC = () => {
                         
                         <div className="space-y-2">
                             <label className="text-sm font-medium text-slate-700">Gemini API Key (AI Studio)</label>
-                            <div className="relative">
-                                <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                                <input 
-                                    type="password" 
-                                    name="geminiApiKey" 
-                                    value={settings.geminiApiKey} 
-                                    onChange={handleChange} 
-                                    placeholder="AIzaSy... (Gemini Anahtarı)" 
-                                    className="w-full pl-10 pr-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-mono" 
-                                />
+                            <div className="flex gap-2">
+                                <div className="relative flex-1">
+                                    <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                                    <input 
+                                        type="password" 
+                                        name="geminiApiKey" 
+                                        value={settings.geminiApiKey} 
+                                        onChange={handleChange} 
+                                        placeholder="AIzaSy... (Gemini Anahtarı)" 
+                                        className="w-full pl-10 pr-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-mono" 
+                                    />
+                                </div>
+                                <button 
+                                    onClick={handleTestConnection}
+                                    disabled={testStatus === 'testing' || !settings.geminiApiKey}
+                                    className={`px-4 py-2 rounded-lg text-sm font-bold border transition-all flex items-center gap-2 ${
+                                        testStatus === 'success' ? 'bg-green-50 border-green-200 text-green-700' :
+                                        testStatus === 'error' ? 'bg-red-50 border-red-200 text-red-700' :
+                                        'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'
+                                    }`}
+                                >
+                                    {testStatus === 'testing' ? <Loader2 size={16} className="animate-spin" /> : 
+                                     testStatus === 'success' ? <CheckCircle size={16} /> : 
+                                     testStatus === 'error' ? <AlertTriangle size={16} /> : <Wifi size={16} />}
+                                    
+                                    {testStatus === 'testing' ? 'Test...' : 
+                                     testStatus === 'success' ? 'Başarılı' : 
+                                     testStatus === 'error' ? 'Hata' : 'Test Et'}
+                                </button>
                             </div>
+                            
+                            {/* Test Status Message */}
+                            {testMessage && (
+                                <p className={`text-xs mt-1 font-medium ${
+                                    testStatus === 'success' ? 'text-green-600' : 
+                                    testStatus === 'error' ? 'text-red-600' : 'text-slate-500'
+                                }`}>
+                                    {testMessage}
+                                </p>
+                            )}
+
                             <p className="text-xs text-slate-500 mt-1">
                                 Bu anahtar <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-indigo-600 hover:underline">Google AI Studio</a>'dan alınır. Sadece AI işlemleri (sohbet, analiz, görsel) için kullanılır.
                             </p>

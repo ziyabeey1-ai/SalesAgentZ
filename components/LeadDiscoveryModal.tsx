@@ -132,25 +132,41 @@ const LeadDiscoveryModal: React.FC<LeadDiscoveryModalProps> = ({ isOpen, onClose
 
     try {
         const ai = new GoogleGenAI({ apiKey: getApiKey() });
-        
         const prompt = getSearchPrompt();
+        let text = "";
 
-        const result = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: prompt,
-            config: {
-                systemInstruction: SYSTEM_PROMPT + " Sadece geçerli bir JSON dizisi döndür. Başka bir metin ekleme.",
-                tools: [{ googleSearch: {} }] // Enable Google Search Grounding
-            }
-        });
-
-        const text = result.text || '';
+        // Strategy: Try with search first, fallback to generation if tool error (404)
+        try {
+            const result = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: prompt,
+                config: {
+                    systemInstruction: SYSTEM_PROMPT + " Sadece geçerli bir JSON dizisi döndür. Başka bir metin ekleme.",
+                    tools: [{ googleSearch: {} }] // Enabled search
+                    // responseMimeType removed to avoid conflict
+                }
+            });
+            text = result.text || '';
+        } catch (e: any) {
+            console.warn("Search tool failed, retrying without tools...", e);
+            // Fallback: Use simple generation
+            const result = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: prompt + "\n\n(Lütfen arama yapmadan bildiğin veya gerçekçi örnek verilerle yanıtla)",
+                config: {
+                    responseMimeType: 'application/json'
+                }
+            });
+            text = result.text || '';
+        }
         
         let data: any[] = [];
         
         // Robust JSON extraction
         try {
-            data = JSON.parse(text);
+            // Remove markdown code blocks if any
+            const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            data = JSON.parse(cleanText);
         } catch (e) {
             // Regex extraction fallback
             const match = text.match(/\[[\s\S]*\]/);

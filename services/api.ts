@@ -62,6 +62,29 @@ const parseGeminiJson = (text: string) => {
 };
 
 export const api = {
+  system: {
+      testApiKey: async (apiKey: string): Promise<{ success: boolean; message: string }> => {
+          if (!apiKey) return { success: false, message: "API Anahtarı boş." };
+          try {
+              const ai = new GoogleGenAI({ apiKey });
+              // Use the primary model 'gemini-3-flash-preview' to ensure app compatibility
+              await ai.models.generateContent({
+                  model: 'gemini-3-flash-preview',
+                  contents: 'Ping',
+              });
+              return { success: true, message: "Bağlantı Başarılı & Model Aktif" };
+          } catch (error: any) {
+              console.error("API Test Error:", error);
+              let msg = error.message || "Bilinmeyen hata";
+              if (msg.includes("404")) msg = "Model Bulunamadı (404). 'gemini-3-flash-preview' modeline erişilemiyor. Anahtarınızı kontrol edin.";
+              if (msg.includes("403")) msg = "Erişim Reddedildi (403). API Key yetkisi yok veya faturalandırma kapalı.";
+              if (msg.includes("400")) msg = "Geçersiz İstek (400). API Key formatı hatalı olabilir.";
+              if (msg.includes("429")) msg = "Kota Aşıldı (429).";
+              if (msg.includes("API key not valid")) msg = "API Anahtarı geçersiz.";
+              return { success: false, message: msg };
+          }
+      }
+  },
   leads: {
     getAll: async (): Promise<Lead[]> => {
       if (useSheets()) {
@@ -299,7 +322,7 @@ export const api = {
           const hotLeads = leads.filter(l => l.lead_skoru >= 4 && l.lead_durumu !== 'olumlu').length;
           const streak = progress.streakDays;
 
-          // 2. Generate Script (Text)
+          // 2. Generate Script (Text) - Updated to Gemini 3
           const scriptPrompt = `
             Aşağıdaki verilere dayanarak bir satış ajanı için 40-50 kelimelik, enerjik, motive edici ve Türkçe bir sabah brifingi metni yaz.
             Veriler: %${stats.hedef_orani} hedef, ${hotLeads} sıcak lead, ${urgentTasks} acil görev, ${streak} gün seri.
@@ -349,7 +372,7 @@ export const api = {
           `;
 
           const response = await ai.models.generateContent({
-              model: 'gemini-2.0-flash-exp', // Using 2.0 exp for better reasoning fallback
+              model: 'gemini-3-flash-preview', // Updated to 3 for better results
               contents: prompt,
               config: { responseMimeType: 'application/json' }
           });
@@ -366,7 +389,6 @@ export const api = {
 
   strategy: {
       getInsights: async () => {
-          // Placeholder
           return [];
       }
   },
@@ -378,23 +400,32 @@ export const api = {
             "${lead.firma_adi}" (${lead.sektor}, ${lead.ilce}) için rakipleri analiz et.
             ÇIKTI (JSON): { "competitors": [{"name": "...", "website": "...", "strengths": ["..."], "weaknesses": ["..."]}], "summary": "..." }
           `;
-          const response = await ai.models.generateContent({
-              model: 'gemini-3-flash-preview',
-              contents: prompt,
-              config: { 
-                  tools: [{ googleSearch: {} }],
-                  responseMimeType: 'application/json'
-              }
-          });
           
-          return parseGeminiJson(response.text || '{}');
+          try {
+              // Try with search first (no mimeType to avoid 404)
+              const response = await ai.models.generateContent({
+                  model: 'gemini-3-flash-preview',
+                  contents: prompt,
+                  config: { 
+                      tools: [{ googleSearch: {} }]
+                  }
+              });
+              return parseGeminiJson(response.text || '{}');
+          } catch (e) {
+              console.warn("Competitor search failed, using knowledge fallback", e);
+              // Fallback
+              const response = await ai.models.generateContent({
+                  model: 'gemini-3-flash-preview',
+                  contents: prompt + "\n(Lütfen arama yapmadan bildiklerinle veya genel sektör bilgisiyle yanıtla)",
+                  config: { responseMimeType: 'application/json' }
+              });
+              return parseGeminiJson(response.text || '{}');
+          }
       }
   },
 
   visuals: {
       generateHeroImage: async (lead: Lead): Promise<string> => {
-          // Using a placeholder service since image generation models need strict handling
-          // In a real scenario with Imagen access, you'd use that here.
           return `https://via.placeholder.com/800x400?text=${encodeURIComponent(lead.firma_adi)}+Web+Design`;
       },
       generateSocialPostImage: async (prompt: string): Promise<string> => {
@@ -445,25 +476,14 @@ export const api = {
             ]
           `;
 
-          try {
-              const response = await ai.models.generateContent({
-                  model: 'gemini-3-flash-preview',
-                  contents: prompt,
-                  config: { responseMimeType: 'application/json' }
-              });
-              
-              return parseGeminiJson(response.text || '[]');
-          } catch (error) {
-              console.warn("Gemini 3 failed, trying fallback model...");
-              // Fallback to 2.0 Flash Exp if 3 fails (often more stable for JSON)
-              const fallbackAi = new GoogleGenAI({ apiKey });
-              const fallbackResponse = await fallbackAi.models.generateContent({
-                  model: 'gemini-2.0-flash-exp',
-                  contents: prompt,
-                  config: { responseMimeType: 'application/json' }
-              });
-              return parseGeminiJson(fallbackResponse.text || '[]');
-          }
+          // Removed fallback to 2.0, sticking to standard 3
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: prompt,
+              config: { responseMimeType: 'application/json' }
+          });
+          
+          return parseGeminiJson(response.text || '[]');
       },
       
       generateInitialTemplates: async (packages: PricingPackage[]): Promise<EmailTemplate[]> => {
@@ -479,7 +499,7 @@ export const api = {
           `;
 
           const response = await ai.models.generateContent({
-              model: 'gemini-2.0-flash-exp', // Using 2.0 for stability
+              model: 'gemini-3-flash-preview', // Updated to 3
               contents: prompt,
               config: { responseMimeType: 'application/json' }
           });
