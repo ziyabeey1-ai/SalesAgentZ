@@ -1,4 +1,4 @@
-import React, { ErrorInfo, ReactNode } from 'react';
+import React, { Component, ErrorInfo, ReactNode } from 'react';
 
 interface Props {
   children?: ReactNode;
@@ -9,11 +9,14 @@ interface State {
   message: string;
 }
 
-export default class AppErrorBoundary extends React.Component<Props, State> {
-  public state: State = {
-    hasError: false,
-    message: ''
-  };
+export default class AppErrorBoundary extends Component<Props, State> {
+  constructor(props: Props) {
+    super(props);
+    this.state = {
+      hasError: false,
+      message: ''
+    };
+  }
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, message: error?.message || 'Bilinmeyen bir hata oluştu.' };

@@ -154,7 +154,6 @@ export const api = {
         }
     }
   },
-  // NEW: Interactions Module
   interactions: {
       getRecent: async (limit: number = 10): Promise<Interaction[]> => {
           const all = useSheets() ? await sheetsService.getInteractions() : storage.getInteractions();
@@ -347,10 +346,15 @@ export const api = {
       testApiKey: async (apiKey: string) => {
           try {
               const ai = new GoogleGenAI({ apiKey });
-              const model = ai.getGenerativeModel({ model: 'gemini-3-flash-preview' });
-              await model.generateContent("Test");
+              // Use correct method generateContent instead of getGenerativeModel
+              await ai.models.generateContent({
+                  model: 'gemini-3-flash-preview',
+                  contents: "Test connection",
+              });
               return { success: true };
-          } catch (e: any) { return { success: false, message: e.message }; }
+          } catch (e: any) { 
+              return { success: false, message: e.message }; 
+          }
       }
   },
   setup: {
