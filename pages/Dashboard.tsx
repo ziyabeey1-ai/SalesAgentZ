@@ -57,7 +57,7 @@ const Dashboard: React.FC = () => {
   const [chartData, setChartData] = useState<any[]>([]);
   
   const { thoughts, isAgentRunning, toggleAgent, agentConfig } = useAgent();
-  const thoughtsEndRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<HTMLDivElement>(null);
   
   const [briefingStatus, setBriefingStatus] = useState<'idle' | 'loading' | 'playing'>('idle');
 
@@ -148,9 +148,13 @@ const Dashboard: React.FC = () => {
     fetchDashboardData();
   }, []);
 
+  // FIX: Scroll container to top (newest items) instead of scrolling window to bottom element
   useEffect(() => {
-      if (thoughtsEndRef.current) {
-          thoughtsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      if (terminalRef.current) {
+          terminalRef.current.scrollTo({
+              top: 0,
+              behavior: 'smooth'
+          });
       }
   }, [thoughts]);
 
@@ -342,7 +346,10 @@ const Dashboard: React.FC = () => {
                     </div>
                 </div>
                 
-                <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-3 bg-slate-900/50 relative">
+                <div 
+                    ref={terminalRef} 
+                    className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-3 bg-slate-900/50 relative"
+                >
                     <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5 pointer-events-none"></div>
                     
                     {thoughts.length === 0 ? (
@@ -372,7 +379,6 @@ const Dashboard: React.FC = () => {
                             </div>
                         ))
                     )}
-                    <div ref={thoughtsEndRef} />
                 </div>
             </div>
 

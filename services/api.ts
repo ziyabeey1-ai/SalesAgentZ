@@ -12,6 +12,92 @@ import { SYSTEM_PROMPT } from '../constants';
 
 const getApiKey = () => process.env.API_KEY || localStorage.getItem('apiKey') || '';
 
+const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+const BLOCKED_EMAIL_FRAGMENTS = ['example.com', 'email.com', 'test@', 'noreply@', 'no-reply@'];
+const FREE_EMAIL_DOMAINS = new Set(['gmail.com', 'hotmail.com', 'outlook.com', 'yahoo.com', 'yandex.com']);
+
+// NEW: Public domains to skip advanced validation
+const COMMON_PUBLIC_EMAIL_DOMAINS = new Set([
+    'gmail.com', 'googlemail.com', 'hotmail.com', 'outlook.com', 'live.com', 'msn.com',
+    'yahoo.com', 'yandex.com', 'icloud.com', 'me.com', 'mac.com', 'proton.me', 'protonmail.com'
+]);
+
+const normalizeEmail = (email: string): string => email.trim().toLowerCase();
+
+const isValidLeadEmail = (email: string): boolean => {
+    const normalized = normalizeEmail(email);
+    return EMAIL_REGEX.test(normalized) && !BLOCKED_EMAIL_FRAGMENTS.some(fragment => normalized.includes(fragment));
+};
+
+const isHighConfidenceFreeEmail = (email: string, confidenceScore?: number, source?: string): boolean => {
+    const domain = normalizeEmail(email).split('@')[1] || '';
+    if (!FREE_EMAIL_DOMAINS.has(domain)) return true;
+    // Free e-mail adreslerinde (özellikle gmail) yanlış/terkedilmiş adres riski daha yüksek.
+    // Bu yüzden daha yüksek skor ve görünür bir kaynak zorunlu tutuyoruz.
+    return (confidenceScore || 0) >= 90 && Boolean(source);
+};
+
+const extractEmailDomain = (email: string): string | null => {
+    const normalized = (email || '').trim().toLowerCase();
+    const atIndex = normalized.lastIndexOf('@');
+    if (atIndex === -1 || atIndex === normalized.length - 1) return null;
+    const domain = normalized.slice(atIndex + 1).trim();
+    return domain || null;
+};
+
+const fetchWithTimeout = async (url: string, timeoutMs: number, init?: RequestInit) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...init, signal: controller.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
+const hasResolvableDns = async (domain: string): Promise<boolean> => {
+    try {
+        const dnsUrl = `https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=A`;
+        const res = await fetchWithTimeout(dnsUrl, 4000, { headers: { Accept: 'application/json' } });
+        if (!res.ok) return false;
+        const data = await res.json();
+        return Array.isArray(data?.Answer) && data.Answer.length > 0;
+    } catch {
+        return false;
+    }
+};
+
+const isWebsiteReachable = async (domain: string): Promise<boolean> => {
+    const candidates = [`https://${domain}`, `https://www.${domain}`];
+    for (const url of candidates) {
+        try {
+            // no-cors: Cross origin kısıtlarında bile ağ katmanında erişim denemesi yapar.
+            await fetchWithTimeout(url, 5000, { method: 'GET', mode: 'no-cors', redirect: 'follow' });
+            return true;
+        } catch {
+            // sıradaki adrese geç
+        }
+    }
+    return false;
+};
+
+const validateRecipientDomainBeforeSend = async (recipientEmail: string) => {
+    const domain = extractEmailDomain(recipientEmail);
+    if (!domain || COMMON_PUBLIC_EMAIL_DOMAINS.has(domain)) return;
+
+    // 1. DNS Check
+    const dnsOk = await hasResolvableDns(domain);
+    if (!dnsOk) {
+        throw new Error(`ALICI_DOMAIN_DNS_HATASI:${domain}`);
+    }
+
+    // 2. Website Reachability Check
+    const websiteOk = await isWebsiteReachable(domain);
+    if (!websiteOk) {
+        throw new Error(`ALICI_WEBSITE_ERISILEMIYOR:${domain}`);
+    }
+};
+
 const parseGeminiJson = (text: string) => {
     try {
         if (!text) return {};
@@ -142,6 +228,7 @@ export const api = {
                   "telefon": "...",
                   "email": "...", 
                   "email_kaynagi": "Web Sitesi / Facebook / Instagram / Rehber",
+                  "email_dogrulama_skoru": 0,
                   "web_sitesi_durumu": "Var/Yok/Kötü",
                   "firsat_nedeni": "..."
                 }
@@ -165,8 +252,16 @@ export const api = {
 
             if (data.leads && Array.isArray(data.leads)) {
                 for (const item of data.leads) {
-                    // Double Check: Basic Regex and reject 'example' domains
-                    if (item.email && item.email.includes('@') && !item.email.includes('example.com') && !item.email.includes('email.com')) {
+                    const email = item.email ? normalizeEmail(item.email) : '';
+                    const confidenceScore = Number(item.email_dogrulama_skoru || 0);
+                    const source = item.email_kaynagi || '';
+
+                    if (
+                        email &&
+                        isValidLeadEmail(email) &&
+                        confidenceScore >= 75 &&
+                        isHighConfidenceFreeEmail(email, confidenceScore, source)
+                    ) {
                         foundLeads.push({
                             id: Math.random().toString(36).substr(2, 9),
                             firma_adi: item.firma_adi || 'Bilinmiyor',
@@ -174,7 +269,7 @@ export const api = {
                             ilce: district,
                             adres: item.adres || district,
                             telefon: item.telefon || '',
-                            email: item.email,
+                            email,
                             kaynak: 'AI Asistan',
                             websitesi_var_mi: item.web_sitesi_durumu === 'Yok' ? 'Hayır' : 'Evet',
                             lead_durumu: 'aktif',
@@ -207,6 +302,7 @@ export const api = {
   },
   gmail: {
       send: async (to: string, subject: string, body: string, attachments?: any[]) => {
+          await validateRecipientDomainBeforeSend(to);
           gamificationService.recordAction('email_sent');
           if (canUseGoogleWorkspaceApis()) {
               const res = await gmailService.sendEmail(to, subject, body, attachments);

@@ -603,8 +603,8 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 // --- FIX: AUTO RESUME MECHANISM ---
                 // Instead of stopping safely, pause for cooldown if burst limit reached
                 if (burstStreakRef.current > 30) {
-                    setAgentStatus("Aşırı yüklenme algılandı. Soğuma modu aktif (3dk)...");
-                    addThought('warning', "İşlem yoğunluğu çok yüksek. Sistem kendini 3 dakika soğumaya alıyor...");
+                    setAgentStatus("Aşırı yüklenme algılandı. Soğuma modu aktif (1dk)...");
+                    addThought('warning', "İşlem yoğunluğu çok yüksek. Sistem kendini 60 saniye soğumaya alıyor...");
                     
                     // Reset streak and resume after delay
                     setTimeout(() => {
@@ -613,7 +613,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                             addThought('info', "Soğuma tamamlandı. Otopilot tekrar devreye giriyor.");
                             agentLoop();
                         }
-                    }, 180000); // 3 minutes pause
+                    }, 60000); // Reduced to 1 minute pause
                     return; // Exit current loop instance
                 }
 
