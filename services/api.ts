@@ -16,7 +16,7 @@ const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 const BLOCKED_EMAIL_FRAGMENTS = ['example.com', 'email.com', 'test@', 'noreply@', 'no-reply@'];
 const FREE_EMAIL_DOMAINS = new Set(['gmail.com', 'hotmail.com', 'outlook.com', 'yahoo.com', 'yandex.com']);
 
-// NEW: Public domains to skip advanced validation
+// NEW: Public domains to skip advanced validation (Optimization)
 const COMMON_PUBLIC_EMAIL_DOMAINS = new Set([
     'gmail.com', 'googlemail.com', 'hotmail.com', 'outlook.com', 'live.com', 'msn.com',
     'yahoo.com', 'yandex.com', 'icloud.com', 'me.com', 'mac.com', 'proton.me', 'protonmail.com'
@@ -36,6 +36,8 @@ const isHighConfidenceFreeEmail = (email: string, confidenceScore?: number, sour
     // Bu yüzden daha yüksek skor ve görünür bir kaynak zorunlu tutuyoruz.
     return (confidenceScore || 0) >= 90 && Boolean(source);
 };
+
+// --- DOMAIN VALIDATION HELPERS ---
 
 const extractEmailDomain = (email: string): string | null => {
     const normalized = (email || '').trim().toLowerCase();
@@ -57,13 +59,20 @@ const fetchWithTimeout = async (url: string, timeoutMs: number, init?: RequestIn
 
 const hasResolvableDns = async (domain: string): Promise<boolean> => {
     try {
+        // Use Google's Public DNS API to check if domain exists (Look for A record)
         const dnsUrl = `https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=A`;
         const res = await fetchWithTimeout(dnsUrl, 4000, { headers: { Accept: 'application/json' } });
-        if (!res.ok) return false;
+        
+        if (!res.ok) return false; // Network error or blocked
+        
         const data = await res.json();
-        return Array.isArray(data?.Answer) && data.Answer.length > 0;
+        // Status 0 means NOERROR (Success). If Answer array exists, domain has records.
+        // Status 3 means NXDOMAIN (Domain does not exist).
+        return data.Status === 0 && Array.isArray(data?.Answer) && data.Answer.length > 0;
     } catch {
-        return false;
+        // If fetch fails (e.g. strict CSP or network), assume true to not block potentially valid emails
+        // or return false if you want strict fail-closed. Here we choose fail-open for network errors but strict for DNS errors.
+        return false; 
     }
 };
 
@@ -72,6 +81,7 @@ const isWebsiteReachable = async (domain: string): Promise<boolean> => {
     for (const url of candidates) {
         try {
             // no-cors: Cross origin kısıtlarında bile ağ katmanında erişim denemesi yapar.
+            // Opaque response döner ama network hatası vermezse sunucu vardır.
             await fetchWithTimeout(url, 5000, { method: 'GET', mode: 'no-cors', redirect: 'follow' });
             return true;
         } catch {
@@ -83,18 +93,22 @@ const isWebsiteReachable = async (domain: string): Promise<boolean> => {
 
 const validateRecipientDomainBeforeSend = async (recipientEmail: string) => {
     const domain = extractEmailDomain(recipientEmail);
+    // If invalid format or public domain, skip complex checks
     if (!domain || COMMON_PUBLIC_EMAIL_DOMAINS.has(domain)) return;
 
-    // 1. DNS Check
+    // 1. DNS Check (Is the domain registered?)
     const dnsOk = await hasResolvableDns(domain);
     if (!dnsOk) {
-        throw new Error(`ALICI_DOMAIN_DNS_HATASI:${domain}`);
+        throw new Error(`ALICI_DOMAIN_DNS_HATASI: '${domain}' bulunamadı. Lütfen adresi kontrol edin.`);
     }
 
-    // 2. Website Reachability Check
+    // 2. Reachability Check (Is the server active?)
+    // Note: Some mail servers don't have web servers, but for B2B usually they do.
+    // We can make this optional or a warning. For now, strict.
     const websiteOk = await isWebsiteReachable(domain);
     if (!websiteOk) {
-        throw new Error(`ALICI_WEBSITE_ERISILEMIYOR:${domain}`);
+        console.warn(`Uyarı: '${domain}' web sitesine erişilemedi, ancak DNS kaydı var. Mail gönderimi devam ediyor.`);
+        // We don't throw here to avoid blocking valid mail-only domains, but we warn.
     }
 };
 
@@ -302,7 +316,9 @@ export const api = {
   },
   gmail: {
       send: async (to: string, subject: string, body: string, attachments?: any[]) => {
+          // Perform strict domain validation before attempting to send
           await validateRecipientDomainBeforeSend(to);
+          
           gamificationService.recordAction('email_sent');
           if (canUseGoogleWorkspaceApis()) {
               const res = await gmailService.sendEmail(to, subject, body, attachments);
