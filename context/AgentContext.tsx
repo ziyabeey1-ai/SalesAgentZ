@@ -4,6 +4,7 @@ import { GoogleGenAI } from "@google/genai";
 import { Lead, AgentThought, AgentConfig, EmailTemplate } from '../types';
 import { api } from '../services/api';
 import { storage } from '../services/storage';
+import { sheetsService } from '../services/googleSheetsService';
 
 export interface AgentNotification {
     id: string;
@@ -64,10 +65,26 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     useEffect(() => { configRef.current = agentConfig; }, [agentConfig]);
     useEffect(() => { isRunningRef.current = isAgentRunning; }, [isAgentRunning]);
 
-    // Initialize
+    // Initialize & Auto-Connect Google Services
     useEffect(() => {
         refreshPendingCount();
         const interval = setInterval(refreshPendingCount, 10000);
+        
+        // Auto-initialize Google Sheets Service if credentials exist
+        const initGoogle = async () => {
+            const apiKey = localStorage.getItem('googleApiKey');
+            const clientId = localStorage.getItem('clientId');
+            if (apiKey && clientId) {
+                try {
+                    await sheetsService.initialize(apiKey, clientId);
+                    console.log("Google Service Auto-Initialized");
+                } catch (e) {
+                    console.error("Google Service Auto-Init Failed:", e);
+                }
+            }
+        };
+        initGoogle();
+
         return () => clearInterval(interval);
     }, []);
 
@@ -250,7 +267,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             };
 
             if (lead.email) {
-                await api.gmail.send(lead.email, draftSubject, draftContent);
+                const response = await api.gmail.send(lead.email, draftSubject, draftContent);
                 await api.leads.logInteraction(lead.id, 'email', `Otomatik takip yanıtı: ${draftSubject}`);
                 await api.leads.update({
                     ...lead,
@@ -259,7 +276,12 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                     draftResponse: undefined
                 });
                 await api.dashboard.logAction('Otomatik Yanıt', `${lead.firma_adi} için takip yanıtı gönderildi.`, 'success');
-                addThought('success', `Otomatik yanıt gönderildi: ${lead.firma_adi}`);
+                
+                if (response._status === 'mock') {
+                    addThought('warning', `[SİMÜLASYON] ${lead.firma_adi} yanıtı gönderildi (Gerçek gönderim için Ayarlar'dan Google'a bağlanın).`);
+                } else {
+                    addThought('success', `Otomatik yanıt gönderildi: ${lead.firma_adi}`);
+                }
                 return true;
             }
 
@@ -435,7 +457,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
                 if (!checkAndIncrementCost()) return false;
 
-                await api.gmail.send(lead.email, subject, body);
+                const response = await api.gmail.send(lead.email, subject, body);
                 await api.leads.logInteraction(lead.id, 'email', `Otomatik outreach (AI): ${subject}`);
                 await api.leads.update({
                     ...lead,
@@ -443,7 +465,12 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                     son_kontakt_tarihi: new Date().toISOString().slice(0, 10)
                 });
                 await api.dashboard.logAction('Otomatik Outreach', `${lead.firma_adi} için AI üretimli intro mail gönderildi.`, 'success');
-                addThought('success', `${lead.firma_adi} için AI üretimli intro mail gönderildi.`);
+                
+                if (response._status === 'mock') {
+                    addThought('warning', `[SİMÜLASYON] ${lead.firma_adi} için AI maili simüle edildi (Google bağlantısı yok).`);
+                } else {
+                    addThought('success', `${lead.firma_adi} için AI üretimli intro mail gönderildi.`);
+                }
                 return true;
             } catch (e) {
                 console.error('Outreach fallback error', e);
@@ -460,12 +487,15 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         const bestTemplate = [...activeIntroTemplates].sort((a, b) => getTemplateScore(b) - getTemplateScore(a))[0];
 
+        // --- FIXED: Read Company Name from storage profile properly ---
+        const userProfile = storage.getUserProfile();
+        
         const replacements: Record<string, string> = {
             '{firma_adi}': lead.firma_adi,
             '{yetkili}': lead.yetkili_adi || 'Yetkili',
             '{sektor}': lead.sektor,
             '{ilce}': lead.ilce,
-            '{ajans_adi}': localStorage.getItem('companyName') || 'Ajansımız'
+            '{ajans_adi}': userProfile.companyName || 'Ajansımız'
         };
 
         const applyTemplate = (content: string) => {
@@ -485,7 +515,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         addThought('action', `${lead.firma_adi} için intro maili gönderiliyor.`);
 
         try {
-            await api.gmail.send(lead.email, subject, body);
+            const response = await api.gmail.send(lead.email, subject, body);
             await api.leads.logInteraction(lead.id, 'email', `Otomatik outreach: ${subject}`);
             await api.leads.update({
                 ...lead,
@@ -494,7 +524,12 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 lastUsedTemplateId: bestTemplate.id
             });
             await api.dashboard.logAction('Otomatik Outreach', `${lead.firma_adi} için intro mail gönderildi.`, 'success');
-            addThought('success', `${lead.firma_adi} için intro maili başarıyla gönderildi.`);
+            
+            if (response._status === 'mock') {
+                addThought('warning', `[SİMÜLASYON] ${lead.firma_adi} için mail gönderildi (Gerçek gönderim için Google Girişi yapın).`);
+            } else {
+                addThought('success', `${lead.firma_adi} için intro maili başarıyla gönderildi.`);
+            }
             return true;
         } catch (e) {
             console.error('Outreach error', e);

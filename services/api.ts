@@ -42,7 +42,6 @@ const canUseGoogleWorkspaceApis = () => {
 };
 
 export const api = {
-  // ... (leads, gmail, whatsapp modules unchanged)
   leads: {
     getAll: async (): Promise<Lead[]> => {
       if (useSheets()) return await sheetsService.getLeads();
@@ -170,9 +169,14 @@ export const api = {
   gmail: {
       send: async (to: string, subject: string, body: string, attachments?: any[]) => {
           gamificationService.recordAction('email_sent');
-          if (canUseGoogleWorkspaceApis()) return await gmailService.sendEmail(to, subject, body, attachments);
+          if (canUseGoogleWorkspaceApis()) {
+              const res = await gmailService.sendEmail(to, subject, body, attachments);
+              return { ...res, _status: 'real' };
+          }
+          // Fallback to mock
           await new Promise(resolve => setTimeout(resolve, 800));
-          return { id: 'local-mock-id' };
+          console.warn(`[MOCK EMAIL] To: ${to}, Subject: ${subject}`);
+          return { id: 'local-mock-id', _status: 'mock' };
       }
   },
   whatsapp: {
@@ -230,22 +234,50 @@ export const api = {
       generateColdEmail: async (lead: Lead) => {
           const ai = new GoogleGenAI({ apiKey: getApiKey() });
           
+          // --- FIXED: Inject User Profile ---
+          const userProfile = storage.getUserProfile();
+          
           let personaContext = "";
           if (lead.personaAnalysis) {
               personaContext = `
-                ALICI PROFİLİ: ${lead.personaAnalysis.type}
-                İLETİŞİM TARZI: ${lead.personaAnalysis.communicationStyle}
-                DİKKAT EDİLECEKLER: ${lead.personaAnalysis.traits.join(', ')}.
+                ALICI PROFİLİ: 
+                - Tip: ${lead.personaAnalysis.type}
+                - İletişim Tarzı: ${lead.personaAnalysis.communicationStyle}
+                - Dikkat Edilecekler: ${lead.personaAnalysis.traits.join(', ')}.
               `;
           } else {
-              personaContext = "Profil bilinmiyor, genel ve profesyonel bir dil kullan.";
+              personaContext = "Alıcı profili bilinmiyor, genel ve profesyonel bir dil kullan.";
           }
 
+          // Build Sender Context from Profile
+          const senderContext = `
+            GÖNDEREN KİMLİĞİ (SEN BU KİŞİSİN):
+            Ad Soyad: ${userProfile.fullName || 'Satış Temsilcisi'}
+            Şirket: ${userProfile.companyName || 'Ajansımız'}
+            Unvan: ${userProfile.role || 'Danışman'}
+            Ton: ${userProfile.tone || 'Profesyonel'}
+            Web Sitesi: ${userProfile.website || ''}
+          `;
+
           const prompt = `
-            Lead: ${lead.firma_adi} (${lead.sektor})
-            Durum: ${lead.lead_durumu}
+            HEDEF (ALICI): ${lead.firma_adi} (${lead.sektor})
+            YETKİLİ ADI: ${lead.yetkili_adi || 'Yetkili'}
+            DURUM: ${lead.lead_durumu}
+            
+            ${senderContext}
+            
             ${personaContext}
-            GÖREV: Cold Email yaz. JSON döndür.
+            
+            GÖREV: ${lead.firma_adi} için etkileyici bir "Cold Email" (Tanışma Maili) yaz.
+            
+            ⚠️ KESİN KURALLAR:
+            1. Asla '[Adınız]', '[Şirket Adı]' gibi yer tutucular (placeholder) kullanma.
+            2. Yukarıdaki "GÖNDEREN KİMLİĞİ" bilgilerini kullanarak maili doldur.
+            3. İmza kısmına "${userProfile.fullName}, ${userProfile.role}" yaz.
+            4. Eğer alıcı yetkili adı bilinmiyorsa "Sayın Yetkili" diye başla.
+            5. Seçilen "Ton"a (${userProfile.tone}) uygun yaz.
+
+            JSON FORMATINDA DÖNDÜR:
             { "subject": "...", "body": "...", "cta": "...", "tone": "..." }
           `;
           
@@ -254,7 +286,13 @@ export const api = {
             return parseGeminiJson(response.text || '{}');
           } catch (e) {
             console.error("Cold Email Generation Failed", e);
-            return { subject: "Tanışma", body: "Merhaba, sizinle çalışmak isteriz.", cta: "Görüşelim", tone: "Neutral" };
+            // Fallback with profile data to prevent [Placeholder] texts even in fallback
+            return { 
+                subject: `Merhaba ${lead.firma_adi}`, 
+                body: `Merhaba,\n\nBen ${userProfile.companyName}'den ${userProfile.fullName}. Sizinle dijital fırsatlar hakkında görüşmek isterim.\n\nSaygılarımla,\n${userProfile.fullName}`, 
+                cta: "Görüşelim", 
+                tone: "Neutral" 
+            };
           }
       }
   },

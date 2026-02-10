@@ -8,23 +8,28 @@ export class GmailService {
         const boundary = "foo_bar_baz";
         const nl = "\r\n";
         
+        // FIX: Proper UTF-8 Encoding for Subject (RFC 2047)
+        // Format: =?utf-8?B?base64_encoded_string?=
+        // This prevents characters like 'Ş', 'İ', 'ğ' from appearing as garbage characters.
+        const encodedSubject = `=?utf-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`;
+        
         let msg = "";
         
         // Headers
         msg += `To: ${to}${nl}`;
-        msg += `Subject: ${subject}${nl}`;
+        msg += `Subject: ${encodedSubject}${nl}`;
         msg += `MIME-Version: 1.0${nl}`;
         msg += `Content-Type: multipart/mixed; boundary="${boundary}"${nl}${nl}`;
         
-        // Body (HTML) - CHANGED FROM text/plain TO text/html
+        // Body (HTML) - Ensure UTF-8 charset
         msg += `--${boundary}${nl}`;
         msg += `Content-Type: text/html; charset=utf-8${nl}`;
         msg += `Content-Transfer-Encoding: 7bit${nl}${nl}`;
         
-        // Wrap body in a basic HTML structure for better compatibility
+        // Wrap body in a basic HTML structure for better rendering
         const htmlBody = `
             <div style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.5; color: #333;">
-                ${body}
+                ${body.replace(/\n/g, '<br/>')}
             </div>
         `;
         
@@ -44,7 +49,7 @@ export class GmailService {
         
         msg += `--${boundary}--`;
 
-        // Base64url encoding
+        // Base64url encoding for the API payload
         return btoa(unescape(encodeURIComponent(msg)))
             .replace(/\+/g, '-')
             .replace(/\//g, '_')

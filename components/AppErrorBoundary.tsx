@@ -9,7 +9,15 @@ interface State {
   message: string;
 }
 
-export default class AppErrorBoundary extends React.Component<Props, State> {
+class AppErrorBoundary extends React.Component<Props, State> {
+  // Explicitly declare props for TypeScript compatibility
+  public props: Props;
+
+  constructor(props: Props) {
+    super(props);
+    this.props = props;
+  }
+
   public state: State = {
     hasError: false,
     message: ''
@@ -51,3 +59,5 @@ export default class AppErrorBoundary extends React.Component<Props, State> {
     return this.props.children;
   }
 }
+
+export default AppErrorBoundary;
