@@ -35,6 +35,10 @@ const MIN_ACTIVE_LEADS = 8;
 const MIN_ENRICHMENT_SCORE = 3;
 const AGENT_RUNNING_KEY = 'agentRunning';
 
+const isProspectLead = (lead: Lead): boolean => {
+    return lead.lead_durumu === 'aktif' || lead.lead_durumu === 'beklemede';
+};
+
 export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [isAgentRunning, setIsAgentRunning] = useState(false);
     const [agentStatus, setAgentStatus] = useState('Hazır');
@@ -273,7 +277,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const now = Date.now();
 
         const candidates = leads.filter(l => 
-            l.lead_durumu === 'aktif' && 
+            isProspectLead(l) && 
             (!l.email) && 
             l.lead_skoru >= MIN_ENRICHMENT_SCORE &&
             (targetDistrict === 'Tümü' || l.ilce === targetDistrict) &&
@@ -339,7 +343,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     const performSmartDiscovery = async (leads: Lead[]) => {
-        if (leads.filter(l => l.lead_durumu === 'aktif').length >= MIN_ACTIVE_LEADS) {
+        if (leads.filter(isProspectLead).length >= MIN_ACTIVE_LEADS) {
             return false;
         }
 
@@ -387,7 +391,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     const performOutreach = async (leads: Lead[]) => {
-        const pendingQueue = leads.filter(l => l.lead_durumu === 'aktif' && l.email && !l.son_kontakt_tarihi);
+        const pendingQueue = leads.filter(l => isProspectLead(l) && l.email && !l.son_kontakt_tarihi);
         if (pendingQueue.length === 0) return false;
 
         const templates = await api.templates.getAll();
