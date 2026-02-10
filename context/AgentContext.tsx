@@ -332,9 +332,26 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             } else {
                 const prevState = enrichmentRetryRef.current[target.id];
                 const attempts = (prevState?.attempts || 0) + 1;
+                
+                // CRITICAL FIX: If we tried 3 times and failed, mark as INVALID to stop blocking the pipeline
+                if (attempts >= 3) {
+                    const updatedLead: Lead = {
+                        ...target,
+                        lead_durumu: 'gecersiz',
+                        notlar: target.notlar ? `${target.notlar}\n[AI]: 3 denemede email bulunamadı.` : `[AI]: 3 denemede email bulunamadı.`
+                    };
+                    await api.leads.update(updatedLead);
+                    delete enrichmentRetryRef.current[target.id];
+                    addThought('warning', `${target.firma_adi} pasife alındı (Email bulunamadı).`);
+                    return true; // We return true to indicate action taken (pipeline updated)
+                }
+
                 const cooldownMs = Math.min(60 * 60 * 1000, Math.pow(2, attempts) * 5 * 60 * 1000); 
                 enrichmentRetryRef.current[target.id] = { attempts, nextRetryAt: Date.now() + cooldownMs };
-                addThought('decision', `${target.firma_adi} için email bulunamadı. Pas geçiliyor.`);
+                addThought('decision', `${target.firma_adi} için email bulunamadı. (${attempts}/3).`);
+                
+                // Return true so we don't stall. We "acted" by trying to enrich.
+                return true;
             }
         } catch (e) {
             console.error("Enrichment error", e);
@@ -352,8 +369,8 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             return false;
         }
 
-        // If we have way too many leads clogging the pipe (e.g., 50 leads but no emails), pause to prevent overflow
-        if (totalActive > 25) {
+        // INCREASED LIMIT: Allow pipeline to hold more leads (up to 40) before stopping discovery
+        if (totalActive > 40) {
             addThought('warning', 'Boru hattında çok fazla e-postasız lead var. Keşif duraklatıldı.');
             return false;
         }
