@@ -37,6 +37,10 @@ const useSheets = () => {
     return sheetsService.isAuthenticated && localStorage.getItem('sheetId');
 };
 
+const canUseGoogleWorkspaceApis = () => {
+    return sheetsService.isAuthenticated;
+};
+
 export const api = {
   // ... (leads, gmail, whatsapp modules unchanged)
   leads: {
@@ -154,7 +158,7 @@ export const api = {
   gmail: {
       send: async (to: string, subject: string, body: string, attachments?: any[]) => {
           gamificationService.recordAction('email_sent');
-          if (useSheets()) return await gmailService.sendEmail(to, subject, body, attachments);
+          if (canUseGoogleWorkspaceApis()) return await gmailService.sendEmail(to, subject, body, attachments);
           await new Promise(resolve => setTimeout(resolve, 800));
           return { id: 'local-mock-id' };
       }

@@ -53,9 +53,7 @@ export class GmailService {
 
     public async sendEmail(to: string, subject: string, body: string, attachments?: { filename: string, content: string, mimeType: string }[]): Promise<any> {
         if (!window.gapi?.client?.gmail) {
-            // Fallback / Mock behavior if API not loaded
-            console.log("Mock Email Sent:", { to, subject, hasAttachments: !!attachments });
-            return { id: 'mock-id' };
+            throw new Error('Gmail API hazır değil. Lütfen Ayarlar > Google entegrasyonunda tekrar oturum açın.');
         }
 
         const raw = this.createMimeMessage(to, subject, body, attachments);
