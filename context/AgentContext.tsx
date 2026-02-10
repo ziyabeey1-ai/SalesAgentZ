@@ -237,13 +237,14 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // --- ACTIONS ---
 
-    // NEW: Lead Sanitization Action (Maintenance)
+    // NEW: Lead Sanitization Action (Maintenance) - PRIORITY #1
     const performLeadSanitization = async (leads: Lead[]): Promise<boolean> => {
         // Find leads with invalid data that are marked as 'active' or 'waiting'
         const dirtyLead = leads.find(l => {
-            const isInvalidEmail = l.email && (!l.email.includes('@') || l.email.length < 5 || l.email.includes('null') || l.email.includes('undefined'));
-            // If it has email but it's clearly garbage, OR if it has NO contact info at all and isn't new
-            const isDead = !l.email && !l.telefon && l.lead_durumu !== 'gecersiz';
+            const hasEmail = !!l.email;
+            const isInvalidEmail = hasEmail && (!l.email.includes('@') || l.email.length < 5 || l.email.includes('null') || l.email.includes('undefined'));
+            // If it has email but it's clearly garbage, OR if it has NO contact info at all and isn't new (no email AND no phone)
+            const isDead = (!l.email && !l.telefon) && l.lead_durumu !== 'gecersiz';
             
             return (isProspectLead(l) && isInvalidEmail) || isDead;
         });
@@ -421,13 +422,13 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const actionableLeads = leads.filter(l => isProspectLead(l) && l.email && !l.son_kontakt_tarihi).length;
         const totalActive = leads.filter(isProspectLead).length;
 
-        // If we have enough actionable leads, skip discovery
-        if (actionableLeads >= 3) {
+        // If we have enough actionable leads, skip discovery to save credits/time
+        if (actionableLeads >= 5) {
             return false;
         }
 
-        // INCREASED LIMIT: Allow pipeline to hold more leads (up to 40) before stopping discovery
-        if (totalActive > 40) {
+        // INCREASED LIMIT: Allow pipeline to hold more leads (up to 50) before stopping discovery
+        if (totalActive > 50) {
             addThought('warning', 'Boru hattında çok fazla e-postasız lead var. Keşif duraklatıldı.');
             return false;
         }
