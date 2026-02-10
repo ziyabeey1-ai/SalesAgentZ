@@ -36,6 +36,9 @@ const MIN_ACTIVE_LEADS = 8;
 const MIN_ENRICHMENT_SCORE = 3;
 const AGENT_RUNNING_KEY = 'agentRunning';
 
+// PRIORITY DISTRICTS
+const PRIORITY_DISTRICTS = ['Bahçeşehir', 'Esenyurt', 'Beylikdüzü'];
+
 const isProspectLead = (lead: Lead): boolean => {
     return lead.lead_durumu === 'aktif' || lead.lead_durumu === 'beklemede';
 };
@@ -407,7 +410,14 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (!checkAndIncrementCost()) return false;
 
         const { targetDistrict, targetSector } = configRef.current;
-        const district = targetDistrict === 'Tümü' ? 'Kadıköy' : targetDistrict;
+        
+        // --- PRIORITY LOGIC ---
+        let district = targetDistrict;
+        if (targetDistrict === 'Tümü') {
+            // Pick a priority district randomly to focus the search
+            district = PRIORITY_DISTRICTS[Math.floor(Math.random() * PRIORITY_DISTRICTS.length)];
+        }
+        
         const sector = targetSector === 'Tümü' ? 'Diğer' : targetSector;
 
         setAgentStatus('Pipeline besleniyor: Yeni fırsatlar aranıyor...');
@@ -589,12 +599,25 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
             if (actionTaken) {
                 burstStreakRef.current += 1;
-                setAgentStatus(`Burst Mode x${burstStreakRef.current}: İşlem tamamlandı, yeni tur hazırlanıyor...`);
-                // Safety clamp on burst streak to prevent infinite rapid loops if something is stuck
-                if (burstStreakRef.current > 50) {
-                    stopAgentSafely("Aşırı işlem yükü algılandı (Burst Limit). Güvenlik için durduruldu.");
-                    return;
+                
+                // --- FIX: AUTO RESUME MECHANISM ---
+                // Instead of stopping safely, pause for cooldown if burst limit reached
+                if (burstStreakRef.current > 30) {
+                    setAgentStatus("Aşırı yüklenme algılandı. Soğuma modu aktif (3dk)...");
+                    addThought('warning', "İşlem yoğunluğu çok yüksek. Sistem kendini 3 dakika soğumaya alıyor...");
+                    
+                    // Reset streak and resume after delay
+                    setTimeout(() => {
+                        burstStreakRef.current = 0;
+                        if (isRunningRef.current) {
+                            addThought('info', "Soğuma tamamlandı. Otopilot tekrar devreye giriyor.");
+                            agentLoop();
+                        }
+                    }, 180000); // 3 minutes pause
+                    return; // Exit current loop instance
                 }
+
+                setAgentStatus(`Burst Mode x${burstStreakRef.current}: İşlem tamamlandı, yeni tur hazırlanıyor...`);
                 loopTimeoutRef.current = setTimeout(agentLoop, BURST_INTERVAL);
             } else {
                 setAgentStatus(isBusinessHours() ? 'Analiz Ediliyor... (Uygun Aksiyon Yok)' : 'Mesai Dışı (Uyku Modu)');
@@ -604,7 +627,9 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         } catch (error: any) {
             console.error("Agent Loop Critical Error", error);
-            stopAgentSafely(`Kritik hata: ${error.message || 'Bilinmeyen hata'}`);
+            // Don't kill the agent on error, just pause and retry
+            addThought('error', `Geçici Hata: ${error.message || 'Bilinmeyen hata'}. Yeniden deneniyor...`);
+            setTimeout(agentLoop, 15000);
         }
     };
 

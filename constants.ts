@@ -1,3 +1,4 @@
+
 import { LeadStatus } from './types';
 
 export const STATUS_COLORS: Record<LeadStatus, string> = {
@@ -19,6 +20,7 @@ export const SECTORS = [
   'Diğer'
 ];
 
+// Reordered based on user priority
 export const DISTRICTS = [
   'Bahçeşehir',
   'Esenyurt',

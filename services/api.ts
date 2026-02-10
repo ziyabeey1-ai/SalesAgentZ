@@ -119,17 +119,19 @@ export const api = {
     },
     discover: async (sector: string, district: string): Promise<Lead[]> => {
         const ai = new GoogleGenAI({ apiKey: getApiKey() });
-        // STRICTOR PROMPT TO PREVENT FAKE EMAILS
+        // STRICTOR PROMPT TO PREVENT FAKE EMAILS AND ENSURE QUALITY
         const prompt = `
             SİSTEM ROLÜ: Titiz Lead Araştırmacısı.
-            GÖREV: İstanbul, ${district} bölgesindeki "${sector}" sektöründe hizmet veren işletmeleri bul.
+            GÖREV: İstanbul, ${district} bölgesindeki "${sector}" sektöründe hizmet veren aktif işletmeleri bul.
             
             ⚠️ KESİN KURALLAR (Email Doğrulama):
             1. Sadece GERÇEK ve DOĞRULANMIŞ e-posta adresi olanları getir.
             2. ASLA tahmin yürütme (Örn: 'info@firmaadi.com' gibi uydurma mailler YAZMA).
-            3. E-posta adresini bir web sitesinde, Facebook sayfasında veya iş rehberinde GÖRDÜYSEN listeye al.
+            3. Firmanın "İletişim", "Instagram Bio" veya "Facebook About" kısımlarını sanal olarak tara.
             4. Web sitesi "Yok" veya "Eski" olanlara öncelik ver.
-            5. En az 3 adet firma bul.
+            5. En az 2, en fazla 4 adet NİTELİKLİ firma bul. Nicelik değil nitelik önemli.
+
+            İPUCU: Özellikle Bahçeşehir, Esenyurt, Beylikdüzü bölgelerine odaklan (Eğer talep bu bölgelerdense).
 
             JSON ÇIKTI FORMATI:
             {
@@ -139,7 +141,7 @@ export const api = {
                   "adres": "...",
                   "telefon": "...",
                   "email": "...", 
-                  "email_kaynagi": "Web Sitesi / Facebook / Rehber (Tahmin ise BOŞ BIRAK)",
+                  "email_kaynagi": "Web Sitesi / Facebook / Instagram / Rehber",
                   "web_sitesi_durumu": "Var/Yok/Kötü",
                   "firsat_nedeni": "..."
                 }
@@ -152,7 +154,7 @@ export const api = {
                 model: 'gemini-3-flash-preview',
                 contents: prompt,
                 config: {
-                    systemInstruction: SYSTEM_PROMPT + " Sadece JSON döndür. Asla sahte veri üretme.",
+                    systemInstruction: SYSTEM_PROMPT + " Sadece JSON döndür. Asla sahte veri üretme. E-mail bulamazsan o firmayı listeye alma.",
                     tools: [{ googleSearch: {} }],
                     responseMimeType: 'application/json'
                 }
