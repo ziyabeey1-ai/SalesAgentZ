@@ -30,8 +30,8 @@ interface AgentContextType {
 const AgentContext = createContext<AgentContextType | undefined>(undefined);
 
 const AGENT_MODEL = 'gemini-3-flash-preview';
-const BURST_INTERVAL = 3000; // Faster burst
-const IDLE_INTERVAL = 10000; // Reduced idle time to 10s for faster recovery
+const BURST_INTERVAL = 2000; // Fast burst
+const IDLE_INTERVAL = 3000; // Reduced idle time to 3s to keep terminal alive
 const MIN_ACTIVE_LEADS = 8;
 const MIN_ENRICHMENT_SCORE = 3;
 const AGENT_RUNNING_KEY = 'agentRunning';
@@ -152,9 +152,9 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const stopAgentSafely = (reason: string) => {
         setIsAgentRunning(false);
         localStorage.setItem(AGENT_RUNNING_KEY, 'false');
-        setAgentStatus('Durduruldu (Hata)');
+        setAgentStatus('Durduruldu (Bütçe)');
         addThought('error', reason);
-        addNotification('Ajan Durduruldu', reason, 'error');
+        addNotification('Ajan Durduruldu', reason, 'warning');
         if (loopTimeoutRef.current) clearTimeout(loopTimeoutRef.current);
     };
 
@@ -189,9 +189,10 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const checkAndIncrementCost = () => {
         const usage = storage.getUsage();
-        if (usage.aiCalls >= usage.dailyLimit) {
+        // Check financial limit instead of raw count
+        if (usage.estimatedCost >= usage.dailyLimit) {
             if (isRunningRef.current) {
-                stopAgentSafely('Günlük limit dolduğu için işlem durduruldu.');
+                stopAgentSafely(`Günlük bütçe ($${usage.dailyLimit}) dolduğu için işlem durduruldu.`);
             }
             return false;
         }
@@ -238,22 +239,30 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // --- ACTIONS ---
 
     // NEW: Lead Sanitization Action (Maintenance) - PRIORITY #1
+    // This is FREE (does not consume credits) and runs in batch.
     const performLeadSanitization = async (leads: Lead[]): Promise<boolean> => {
         // Find leads with invalid data that are marked as 'active' or 'waiting'
-        const dirtyLead = leads.find(l => {
+        const dirtyLeads = leads.filter(l => {
             const hasEmail = !!l.email;
-            const isInvalidEmail = hasEmail && (!l.email.includes('@') || l.email.length < 5 || l.email.includes('null') || l.email.includes('undefined'));
+            const isInvalidEmail = hasEmail && (!l.email.includes('@') || l.email.length < 5 || l.email.includes('null') || l.email.includes('undefined') || l.email === 'info@firma.com');
             // If it has email but it's clearly garbage, OR if it has NO contact info at all and isn't new (no email AND no phone)
             const isDead = (!l.email && !l.telefon) && l.lead_durumu !== 'gecersiz';
             
             return (isProspectLead(l) && isInvalidEmail) || isDead;
-        });
+        }).slice(0, 3); // Process up to 3 at a time to speed up
 
-        if (dirtyLead) {
-            const updatedLead = { ...dirtyLead, lead_durumu: 'gecersiz' as any, notlar: dirtyLead.notlar + '\n[Sistem]: Geçersiz iletişim bilgisi nedeniyle pasife alındı.' };
-            await api.leads.update(updatedLead);
-            setAgentStatus(`Veri Temizliği: ${dirtyLead.firma_adi}`);
-            addThought('decision', `${dirtyLead.firma_adi} iletişim bilgileri bozuk olduğu için 'Geçersiz' olarak işaretlendi.`);
+        if (dirtyLeads.length > 0) {
+            for (const dirtyLead of dirtyLeads) {
+                const updatedLead = { 
+                    ...dirtyLead, 
+                    lead_durumu: 'gecersiz' as any, 
+                    notlar: dirtyLead.notlar + '\n[Sistem]: Geçersiz iletişim bilgisi (Oto-Temizlik).' 
+                };
+                await api.leads.update(updatedLead);
+            }
+            
+            setAgentStatus(`Veri Temizliği: ${dirtyLeads.length} lead arşivlendi.`);
+            addThought('decision', `${dirtyLeads.map(l => l.firma_adi).join(', ')} temizlendi.`);
             return true;
         }
         return false;
@@ -429,7 +438,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         // INCREASED LIMIT: Allow pipeline to hold more leads (up to 50) before stopping discovery
         if (totalActive > 50) {
-            addThought('warning', 'Boru hattında çok fazla e-postasız lead var. Keşif duraklatıldı.');
+            // Wait silently without notification spam
             return false;
         }
 
@@ -610,8 +619,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             let actionTaken = false;
             const isDaytime = isBusinessHours();
 
-            // --- PRIORITY 1: MAINTENANCE & CLEANUP (Safe 24/7) ---
-            // If we have bad data, clean it first before doing anything else.
+            // --- PRIORITY 1: MAINTENANCE & CLEANUP (Safe 24/7, FREE) ---
             if (!actionTaken) actionTaken = await performLeadSanitization(leads);
 
             // --- PRIORITY 2: ENRICHMENT (Safe 24/7) ---
@@ -628,7 +636,6 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 if (!actionTaken) actionTaken = await performOutreach(leads);
             } else {
                 // NIGHT MODE: Draft but DO NOT SEND
-                // This prepares the inbox for the next morning
                 if (!actionTaken) actionTaken = await performAutoReplyDrafting(leads, true); // Draft only
             }
 
@@ -654,11 +661,12 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 loopTimeoutRef.current = setTimeout(agentLoop, BURST_INTERVAL);
             } else {
                 if (isDaytime) {
-                    setAgentStatus('Beklemede (İşlem Yok)...');
+                    setAgentStatus('Beklemede (Taranıyor)...');
                 } else {
                     setAgentStatus('Gece Vardiyası: Keşif & Bakım Modu');
                 }
                 burstStreakRef.current = 0;
+                // Fast recovery loop to check for new tasks
                 loopTimeoutRef.current = setTimeout(agentLoop, IDLE_INTERVAL);
             }
 

@@ -585,11 +585,27 @@ const Settings: React.FC = () => {
                 </div>
             </div>
 
-            {/* COST GUARD */}
+            {/* COST GUARD (UPDATED FOR CURRENCY) */}
             <div className="bg-white border border-orange-200 rounded-xl shadow-sm p-6 bg-gradient-to-r from-white to-orange-50">
                 <div className="flex items-start gap-4">
                     <div className="p-2 bg-orange-100 rounded-lg text-orange-600 mt-1"><ShieldCheck className="w-6 h-6" /></div>
-                    <div className="flex-1"><h3 className="text-lg font-bold text-slate-900">Maliyet Koruması</h3><p className="text-sm text-slate-600 mb-4">Günlük API işlem sınırı.</p><div className="flex gap-4 items-center"><input type="range" min="10" max="500" step="10" name="dailyLimit" value={settings.dailyLimit} onChange={(e) => setSettings({...settings, dailyLimit: Number(e.target.value)})} className="flex-1 accent-orange-500 cursor-pointer"/><span className="font-bold text-slate-800">{settings.dailyLimit}</span></div></div>
+                    <div className="flex-1">
+                        <h3 className="text-lg font-bold text-slate-900">Maliyet Koruması</h3>
+                        <p className="text-sm text-slate-600 mb-4">Ajanın günlük harcayabileceği maksimum bütçe.</p>
+                        <div className="flex gap-4 items-center">
+                            <input 
+                                type="number" 
+                                min="0.1" 
+                                step="0.1" 
+                                name="dailyLimit" 
+                                value={settings.dailyLimit} 
+                                onChange={(e) => setSettings({...settings, dailyLimit: Number(e.target.value)})} 
+                                className="w-32 px-3 py-2 border border-slate-300 rounded-lg font-bold text-slate-800 focus:ring-2 focus:ring-orange-500 outline-none"
+                            />
+                            <span className="font-bold text-slate-800 text-lg">$ (USD)</span>
+                            <span className="text-xs text-slate-500 ml-2">Tahmini: ${usage.estimatedCost.toFixed(4)} harcandı.</span>
+                        </div>
+                    </div>
                 </div>
             </div>
           </div>

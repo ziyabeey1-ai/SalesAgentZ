@@ -1,3 +1,4 @@
+
 import { Lead, Task, ActionLog, Interaction, DashboardStats, UsageStats, EmailTemplate, TemplateStats, UserProfile, CalendarEvent, RegionStat } from '../types';
 import { MOCK_LEADS, MOCK_TASKS, MOCK_LOGS, MOCK_INTERACTIONS, MOCK_TEMPLATES } from './mockService';
 
@@ -12,8 +13,10 @@ const KEYS = {
   EVENTS: 'sales_agent_events'
 };
 
-// Pricing Constants (Gemini Flash Approx)
-const COST_PER_REQUEST = 0.0004; 
+// Pricing Constants (USD)
+// Gemini 1.5 Flash Approx Blended Cost per Action (Input + Output + Search overhead)
+// ~ $0.002 per complex action
+const COST_PER_REQUEST = 0.002; 
 
 export const storage = {
   init: () => {
@@ -37,7 +40,6 @@ export const storage = {
       localStorage.setItem(KEYS.TEMPLATES, JSON.stringify(templatesWithStats));
   },
 
-  // CRITICAL: Missing method added
   clearAllData: () => {
       localStorage.removeItem(KEYS.LEADS);
       localStorage.removeItem(KEYS.TASKS);
@@ -45,7 +47,6 @@ export const storage = {
       localStorage.removeItem(KEYS.INTERACTIONS);
       localStorage.removeItem(KEYS.TEMPLATES);
       localStorage.removeItem(KEYS.EVENTS);
-      // We do NOT clear PROFILE or USAGE here to allow reconfiguration without losing identity/credits immediately
   },
 
   // LEADS
@@ -222,7 +223,7 @@ export const storage = {
       localStorage.setItem(KEYS.PROFILE, JSON.stringify(profile));
   },
 
-  // EVENTS (CRITICAL MISSING METHODS)
+  // EVENTS
   getCalendarEvents: (): CalendarEvent[] => {
       const data = localStorage.getItem(KEYS.EVENTS);
       return data ? JSON.parse(data) : [];
@@ -285,7 +286,8 @@ export const storage = {
           if (parsed.date === today) return parsed;
       }
 
-      const defaults = { date: today, aiCalls: 0, searchCalls: 0, dailyLimit: 50, estimatedCost: 0 };
+      // Default daily limit is now $1.00 USD (Approx 500 actions with Flash)
+      const defaults = { date: today, aiCalls: 0, searchCalls: 0, dailyLimit: 1.0, estimatedCost: 0 };
       localStorage.setItem(KEYS.USAGE, JSON.stringify(defaults));
       return defaults;
   },
