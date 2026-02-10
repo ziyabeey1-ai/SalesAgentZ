@@ -33,6 +33,7 @@ interface AgentContextType {
 }
 
 const AgentContext = createContext<AgentContextType | undefined>(undefined);
+const AGENT_MODEL = 'gemini-2.5-flash-preview';
 
 // Helper to get API Key (Updated to prioritize geminiApiKey)
 const getApiKey = () => {
@@ -81,7 +82,7 @@ const parseGeminiJson = (text: string) => {
 };
 
 const extractGeminiText = (result: any) => {
-    if (result?.text) return result.text;
+    if (typeof result?.text === 'string') return result.text;
     const parts = result?.candidates?.[0]?.content?.parts;
     if (Array.isArray(parts)) {
         return parts.map((part: { text?: string }) => part.text || '').join('');
@@ -92,9 +93,29 @@ const extractGeminiText = (result: any) => {
 const getAiClient = () => {
     const apiKey = getApiKey().trim();
     if (!apiKey) {
-        throw new Error('Gemini API anahtarı eksik. Ayarlar sayfasından ekleyin.');
+        throw new Error('Gemini API anahtarı eksik. Ayarlar > Gemini API Key alanını doldurun.');
     }
     return new GoogleGenAI({ apiKey });
+};
+
+const formatAiError = (error: unknown) => {
+    const raw = error instanceof Error ? error.message : String(error);
+    const lower = raw.toLowerCase();
+
+    if (lower.includes('google search') || lower.includes('tool') || lower.includes('not supported')) {
+        return 'Google Search aracı bu API anahtarında yetkili olmayabilir.';
+    }
+    if (lower.includes('model') && (lower.includes('not found') || lower.includes('not supported') || lower.includes('permission denied'))) {
+        return `Seçilen model (${AGENT_MODEL}) erişilebilir değil. Ayarlar/testte çalışan modeli kullanın.`;
+    }
+    if (lower.includes('api key') || lower.includes('invalid_argument') || lower.includes('unauthenticated') || lower.includes('401')) {
+        return 'API anahtarı geçersiz/eksik olabilir. Ayarlar > Gemini API Key alanını kontrol edin.';
+    }
+    if (lower.includes('quota') || lower.includes('429') || lower.includes('rate limit') || lower.includes('resource exhausted')) {
+        return 'Gemini kota/limit aşıldı. Birkaç dakika sonra tekrar deneyin.';
+    }
+
+    return raw;
 };
 
 export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
@@ -253,38 +274,34 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
         `;
 
         let data: any[] = [];
+        let primaryError: unknown = null;
         
         // Attempt 1: With Google Search (Preferred)
         try {
             const result = await ai.models.generateContent({
-                model: 'gemini-3-flash-preview',
+                model: AGENT_MODEL,
                 contents: prompt,
                 config: { 
                     tools: [{ googleSearch: {} }],
-                    // Note: responseMimeType removed as it conflicts with tools in some versions
+                    responseMimeType: 'application/json' 
                 }
             });
-            const text = extractGeminiText(result);
-            if (text) data = parseGeminiJson(text);
-        } catch (e: any) {
-            console.warn("Discovery with Search failed, retrying fallback...", e.message);
-            
-            // Attempt 2: Fallback (No Tools, Pure Generation)
-            // Removed responseMimeType: 'application/json' to reduce 400/404 errors on some accounts/models
+            data = parseGeminiJson(extractGeminiText(result) || '[]');
+        } catch (error) {
+            primaryError = error;
+            // Attempt 2: Fallback (No Tools, No JSON enforcement for better compatibility)
+            const fallbackPrompt = `${prompt}\n\nYANIT: SADECE JSON. Başka metin yazma.`;
             try {
-                const fallbackPrompt = prompt + "\n\nNOT: Google araması şu an meşgul, bu yüzden lütfen bildiğin veya hayali ama gerçekçi örnek yerel işletme verileriyle simülasyon yap. Sadece geçerli JSON dizisi döndür.";
-                const result = await ai.models.generateContent({
-                    model: 'gemini-3-flash-preview',
+                const fallbackResult = await ai.models.generateContent({
+                    model: AGENT_MODEL,
                     contents: fallbackPrompt,
+                    // Note: responseMimeType removed to avoid 400 errors on some models/keys
                 });
-                const text = extractGeminiText(result);
-                if (text) {
-                    data = parseGeminiJson(text);
-                    addThought('warning', 'Google Arama başarısız oldu, simülasyon verisi kullanılıyor.');
-                }
-            } catch (e2) {
-                console.error("Discovery failed completely", e2);
-                throw e2; // Re-throw to be caught by outer block
+                data = parseGeminiJson(extractGeminiText(fallbackResult) || '[]');
+            } catch (fallbackError) {
+                const primaryMessage = formatAiError(primaryError);
+                const fallbackMessage = formatAiError(fallbackError);
+                throw new Error(`Birincil keşif isteği başarısız: ${primaryMessage} | Fallback isteği başarısız: ${fallbackMessage}`);
             }
         }
 
@@ -322,12 +339,12 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
                 addThought('analysis', 'Bulunan firmalar zaten veritabanında mevcut.');
             }
         } else {
-            addThought('warning', 'Model boş veya geçersiz veri döndürdü.');
+            addThought('warning', 'Arama yapıldı ancak uygun formatta veri dönmedi.');
         }
       } catch (e) { 
           console.error("Auto discovery failed", e);
-          const message = e instanceof Error ? e.message : 'Bilinmeyen Hata';
-          addThought('error', `Keşif işlemi tamamen başarısız oldu: ${message}`);
+          const message = formatAiError(e);
+          addThought('error', `Keşif işlemi sırasında hata oluştu: ${message}`);
       }
   };
 
@@ -354,17 +371,18 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
           let textResult = "";
           try {
               const result = await ai.models.generateContent({
-                model: 'gemini-3-flash-preview',
+                model: AGENT_MODEL,
                 contents: prompt,
                 config: { 
-                    tools: [{ googleSearch: {} }] 
+                    tools: [{ googleSearch: {} }],
+                    responseMimeType: 'application/json' 
                 }
               });
               textResult = extractGeminiText(result);
           } catch (searchError) {
               // Fallback
               const result = await ai.models.generateContent({
-                  model: 'gemini-3-flash-preview',
+                  model: AGENT_MODEL,
                   contents: prompt + " (Tahmini veya simülasyon veri üret)"
               });
               textResult = extractGeminiText(result);
@@ -388,8 +406,8 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
           }
       } catch (e) {
           console.error("Enrichment failed", e);
-          const message = e instanceof Error ? e.message : 'API hatası';
-          addThought('error', `${target.firma_adi} zenginleştirme hatası: ${message}`);
+          const message = formatAiError(e);
+          addThought('error', `${target.firma_adi} zenginleştirme başarısız: ${message}`);
       }
       return false;
   };
@@ -533,7 +551,7 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
           const ai = getAiClient();
 
           const simResult = await ai.models.generateContent({
-              model: 'gemini-3-flash-preview',
+              model: AGENT_MODEL,
               contents: `ROL: ${target.firma_adi} sahibi. DURUM: Mail aldın. GÖREV: 'Fiyat nedir?' veya 'Örnek var mı?' gibi kısa bir cevap yaz.`
           });
           const incomingMessage = extractGeminiText(simResult) || "Fiyat nedir?";
@@ -545,7 +563,7 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
           `;
 
           const result = await ai.models.generateContent({
-              model: 'gemini-3-flash-preview',
+              model: AGENT_MODEL,
               contents: draftPrompt,
               config: { responseMimeType: 'application/json' }
           });
@@ -572,7 +590,7 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
 
       } catch (e) {
           console.error("Reply drafting failed", e);
-          const message = e instanceof Error ? e.message : 'API veya JSON hatası';
+          const message = formatAiError(e);
           addThought('error', `Yanıt taslağı üretilemedi: ${message}`);
       }
       return false;

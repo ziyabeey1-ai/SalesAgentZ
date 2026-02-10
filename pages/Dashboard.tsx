@@ -1,5 +1,4 @@
 
-
 import React, { useEffect, useState, useRef } from 'react';
 import { 
   Building2, 
@@ -55,6 +54,18 @@ const Dashboard: React.FC = () => {
   // Strategy Insights State
   const [insights, setInsights] = useState<any[]>([]);
   const [loadingInsights, setLoadingInsights] = useState(false);
+  const [isGeminiConfigured, setIsGeminiConfigured] = useState(false);
+
+  useEffect(() => {
+    const syncGeminiConfig = () => {
+      const key = (localStorage.getItem('geminiApiKey') || localStorage.getItem('apiKey') || '').trim();
+      setIsGeminiConfigured(!!key);
+    };
+
+    syncGeminiConfig();
+    window.addEventListener('storage', syncGeminiConfig);
+    return () => window.removeEventListener('storage', syncGeminiConfig);
+  }, []);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
@@ -262,7 +273,7 @@ const Dashboard: React.FC = () => {
                 </div>
                 <div className="flex items-center gap-3">
                     <span className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">
-                        GEMINI-2.5-FLASH-PREVIEW // CONNECTED
+                        GEMINI-2.5-FLASH-PREVIEW // {isGeminiConfigured ? 'CONFIGURED' : 'API KEY MISSING'}
                     </span>
                     <button 
                         onClick={toggleAgent}
