@@ -324,7 +324,13 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             const prompt = `
               SİSTEM ROLÜ: B2B veri zenginleştirme uzmanı.
               HEDEF: ${target.firma_adi} (${target.ilce}, ${target.sektor})
-              GÖREV: Kurumsal email adresi bul.
+              GÖREV: Web'de kurumsal email adresi bul.
+              
+              ⚠️ KRİTİK:
+              - Asla tahmin yürütme (örn: info@... gibi uydurma).
+              - Sadece %100 emin olduğun, kaynakta geçen mailleri getir.
+              - Bulamazsan boş döndür.
+              
               JSON: { "email": "...", "confidence": "high/medium/low", "source": "..." }
             `;
 
@@ -339,7 +345,8 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             
             const data = parseGeminiJson(extractGeminiText(result) || '{}');
             
-            if (data.email && data.email.includes('@') && !data.email.includes('null')) {
+            // STRICT FILTERING: No 'example.com', no null strings, must have @
+            if (data.email && data.email.includes('@') && !data.email.includes('null') && !data.email.includes('example.com')) {
                 const updatedLead = {
                     ...target,
                     email: data.email,
@@ -452,6 +459,8 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             addThought('info', 'Aktif intro şablonu bulunamadı, AI ile anlık outreach oluşturuluyor.');
             try {
                 const generated = await api.templates.generateColdEmail(lead);
+                // generated content is already cleaned by api.ts before return
+                
                 const subject = generated.subject || `${lead.firma_adi} için kısa bir tanışma`;
                 const body = generated.body || `Merhaba ${lead.yetkili_adi || 'Yetkili'}, ${lead.firma_adi} için dijital büyüme fırsatlarını konuşabilir miyiz?`;
 
@@ -488,20 +497,33 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const bestTemplate = [...activeIntroTemplates].sort((a, b) => getTemplateScore(b) - getTemplateScore(a))[0];
 
         // --- FIXED: Read Company Name from storage profile properly ---
+        // Also refetch profile to ensure we have latest data
         const userProfile = storage.getUserProfile();
+        const myName = userProfile.fullName || 'Satış Temsilcisi';
+        const myCompany = userProfile.companyName || 'Ajansımız';
         
         const replacements: Record<string, string> = {
             '{firma_adi}': lead.firma_adi,
             '{yetkili}': lead.yetkili_adi || 'Yetkili',
             '{sektor}': lead.sektor,
             '{ilce}': lead.ilce,
-            '{ajans_adi}': userProfile.companyName || 'Ajansımız'
+            '{ajans_adi}': myCompany,
+            // Handle square brackets just in case
+            '\\[Şirket Adı\\]': lead.firma_adi,
+            '\\[Firma Adı\\]': lead.firma_adi,
+            '\\[İsim\\]': lead.yetkili_adi || 'Yetkili',
+            '\\[Kendi Şirket Adınız\\]': myCompany,
+            '\\[Şirket Adınız\\]': myCompany,
+            '\\[Senin Adın\\]': myName,
+            '\\[Adınız\\]': myName
         };
 
         const applyTemplate = (content: string) => {
             let result = content;
             Object.entries(replacements).forEach(([key, value]) => {
-                result = result.replace(new RegExp(key.replace(/[{}]/g, '\\$&'), 'g'), value);
+                // If key starts with \[ it's already regex escaped, otherwise escape it
+                const regexKey = key.startsWith('\\') ? key : key.replace(/[{}]/g, '\\$&');
+                result = result.replace(new RegExp(regexKey, 'gi'), value);
             });
             return result;
         };

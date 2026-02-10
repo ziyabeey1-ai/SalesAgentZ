@@ -33,6 +33,39 @@ const parseGeminiJson = (text: string) => {
     }
 };
 
+// --- NEW HELPER: Force Replace Placeholders & Fix Formatting ---
+const cleanAIResponse = (text: string, lead: Lead, profile: UserProfile): string => {
+    if (!text) return "";
+    let clean = text;
+
+    // 1. Replace User/Sender Placeholders (Common AI Hallucinations)
+    const myName = profile.fullName || 'Satış Temsilcisi';
+    const myCompany = profile.companyName || 'Ajansımız';
+    
+    // Aggressive Regex for bracketed placeholders
+    clean = clean.replace(/\[Senin Adın\]/gi, myName);
+    clean = clean.replace(/\[Adınız\]/gi, myName);
+    clean = clean.replace(/\[İsminiz\]/gi, myName);
+    clean = clean.replace(/\[Kendi Şirket Adınız\]/gi, myCompany);
+    clean = clean.replace(/\[Şirket Adınız\]/gi, myCompany);
+    clean = clean.replace(/\[Ajans Adı\]/gi, myCompany);
+    clean = clean.replace(/\[Şirketiniz\]/gi, myCompany);
+
+    // 2. Replace Lead/Target Placeholders
+    const leadName = lead.firma_adi || 'Firma';
+    const contactName = lead.yetkili_adi || 'Sayın Yetkili';
+    
+    clean = clean.replace(/\[Şirket Adı\]/gi, leadName); 
+    clean = clean.replace(/\[Firma Adı\]/gi, leadName);
+    clean = clean.replace(/\[Müşteri Şirket Adı\]/gi, leadName);
+    clean = clean.replace(/\[İsim\]/gi, contactName);
+    clean = clean.replace(/\[Yetkili\]/gi, contactName);
+    clean = clean.replace(/\[Yetkili Adı\]/gi, contactName);
+    clean = clean.replace(/\[Müşteri Adı\]/gi, contactName);
+
+    return clean;
+};
+
 const useSheets = () => {
     return sheetsService.isAuthenticated && localStorage.getItem('sheetId');
 };
@@ -86,14 +119,17 @@ export const api = {
     },
     discover: async (sector: string, district: string): Promise<Lead[]> => {
         const ai = new GoogleGenAI({ apiKey: getApiKey() });
+        // STRICTOR PROMPT TO PREVENT FAKE EMAILS
         const prompt = `
-            SİSTEM ROLÜ: Otonom Lead Avcısı.
+            SİSTEM ROLÜ: Titiz Lead Araştırmacısı.
             GÖREV: İstanbul, ${district} bölgesindeki "${sector}" sektöründe hizmet veren işletmeleri bul.
             
-            KRİTERLER:
-            1. Sadece EMAIL adresi olanları getir (info@, iletisim@ vb.). Email yoksa listeye alma.
-            2. Web sitesi "Yok" veya "Eski" olanlara öncelik ver.
-            3. En az 3 adet firma bul.
+            ⚠️ KESİN KURALLAR (Email Doğrulama):
+            1. Sadece GERÇEK ve DOĞRULANMIŞ e-posta adresi olanları getir.
+            2. ASLA tahmin yürütme (Örn: 'info@firmaadi.com' gibi uydurma mailler YAZMA).
+            3. E-posta adresini bir web sitesinde, Facebook sayfasında veya iş rehberinde GÖRDÜYSEN listeye al.
+            4. Web sitesi "Yok" veya "Eski" olanlara öncelik ver.
+            5. En az 3 adet firma bul.
 
             JSON ÇIKTI FORMATI:
             {
@@ -103,6 +139,7 @@ export const api = {
                   "adres": "...",
                   "telefon": "...",
                   "email": "...", 
+                  "email_kaynagi": "Web Sitesi / Facebook / Rehber (Tahmin ise BOŞ BIRAK)",
                   "web_sitesi_durumu": "Var/Yok/Kötü",
                   "firsat_nedeni": "..."
                 }
@@ -115,7 +152,7 @@ export const api = {
                 model: 'gemini-3-flash-preview',
                 contents: prompt,
                 config: {
-                    systemInstruction: SYSTEM_PROMPT + " Sadece JSON döndür. Yorum yapma.",
+                    systemInstruction: SYSTEM_PROMPT + " Sadece JSON döndür. Asla sahte veri üretme.",
                     tools: [{ googleSearch: {} }],
                     responseMimeType: 'application/json'
                 }
@@ -126,7 +163,8 @@ export const api = {
 
             if (data.leads && Array.isArray(data.leads)) {
                 for (const item of data.leads) {
-                    if (item.email && item.email.includes('@')) {
+                    // Double Check: Basic Regex and reject 'example' domains
+                    if (item.email && item.email.includes('@') && !item.email.includes('example.com') && !item.email.includes('email.com')) {
                         foundLeads.push({
                             id: Math.random().toString(36).substr(2, 9),
                             firma_adi: item.firma_adi || 'Bilinmiyor',
@@ -140,8 +178,7 @@ export const api = {
                             lead_durumu: 'aktif',
                             lead_skoru: item.web_sitesi_durumu === 'Kötü' ? 4 : 3,
                             eksik_alanlar: [],
-                            // FIX: Do not set son_kontakt_tarihi immediately so outreach can pick it up
-                            notlar: `[Otonom Keşif]: ${item.firsat_nedeni || 'Otomatik eklendi'}`
+                            notlar: `[Otonom Keşif]: ${item.firsat_nedeni || 'Otomatik eklendi'} (Email Kaynağı: ${item.email_kaynagi || 'Google Search'})`
                         });
                     }
                 }
@@ -234,7 +271,7 @@ export const api = {
       generateColdEmail: async (lead: Lead) => {
           const ai = new GoogleGenAI({ apiKey: getApiKey() });
           
-          // --- FIXED: Inject User Profile ---
+          // Fetch fresh User Profile
           const userProfile = storage.getUserProfile();
           
           let personaContext = "";
@@ -268,14 +305,15 @@ export const api = {
             
             ${personaContext}
             
-            GÖREV: ${lead.firma_adi} için etkileyici bir "Cold Email" (Tanışma Maili) yaz.
+            GÖREV: ${lead.firma_adi} için etkileyici bir "Cold Email" (Tanışma Maili) gövdesi yaz.
             
             ⚠️ KESİN KURALLAR:
             1. Asla '[Adınız]', '[Şirket Adı]' gibi yer tutucular (placeholder) kullanma.
-            2. Yukarıdaki "GÖNDEREN KİMLİĞİ" bilgilerini kullanarak maili doldur.
-            3. İmza kısmına "${userProfile.fullName}, ${userProfile.role}" yaz.
-            4. Eğer alıcı yetkili adı bilinmiyorsa "Sayın Yetkili" diye başla.
-            5. Seçilen "Ton"a (${userProfile.tone}) uygun yaz.
+            2. Yukarıdaki "GÖNDEREN KİMLİĞİ" bilgilerini kullanarak mailin içeriğini doldur.
+            3. ÖNEMLİ: Metnin en sonuna "Saygılarımla", "İsim Soyad" vb. SAKIN EKLEME. İmzayı sistem otomatik ekleyecek.
+            4. Sadece ana mesajı yaz.
+            5. Eğer alıcı yetkili adı bilinmiyorsa "Sayın Yetkili" diye başla.
+            6. Seçilen "Ton"a (${userProfile.tone}) uygun yaz.
 
             JSON FORMATINDA DÖNDÜR:
             { "subject": "...", "body": "...", "cta": "...", "tone": "..." }
@@ -283,13 +321,31 @@ export const api = {
           
           try {
             const response = await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: prompt, config: { responseMimeType: 'application/json' } });
-            return parseGeminiJson(response.text || '{}');
+            const result = parseGeminiJson(response.text || '{}');
+            
+            // --- STEP 1: FORCE CLEAN PLACEHOLDERS ---
+            // Even if AI hallucinates, we scrub placeholders
+            result.subject = cleanAIResponse(result.subject, lead, userProfile);
+            result.body = cleanAIResponse(result.body, lead, userProfile);
+            
+            // --- STEP 2: PROGRAMMATIC SIGNATURE INJECTION ---
+            // This guarantees the signature is present and correct, regardless of AI output
+            const signature = `\n\nSaygılarımla,\n\n${userProfile.fullName}\n${userProfile.role}\n${userProfile.companyName}\n${userProfile.website || ''}`;
+            
+            // Only append if it doesn't already seem to have the name at the end
+            if (!result.body.includes(userProfile.fullName)) {
+                result.body += signature;
+            }
+            
+            return result;
+
           } catch (e) {
             console.error("Cold Email Generation Failed", e);
-            // Fallback with profile data to prevent [Placeholder] texts even in fallback
+            // Fallback with profile data
+            const signature = `\n\nSaygılarımla,\n\n${userProfile.fullName}\n${userProfile.role}\n${userProfile.companyName}`;
             return { 
                 subject: `Merhaba ${lead.firma_adi}`, 
-                body: `Merhaba,\n\nBen ${userProfile.companyName}'den ${userProfile.fullName}. Sizinle dijital fırsatlar hakkında görüşmek isterim.\n\nSaygılarımla,\n${userProfile.fullName}`, 
+                body: `Merhaba,\n\nBen ${userProfile.companyName}'den ${userProfile.fullName}. Sizinle dijital fırsatlar hakkında görüşmek isterim.${signature}`, 
                 cta: "Görüşelim", 
                 tone: "Neutral" 
             };
