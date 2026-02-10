@@ -219,6 +219,8 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const now = new Date();
         const hour = now.getHours();
         const day = now.getDay();
+        // Cumartesi Pazar da çalışmasın (veya ayara göre değişebilir)
+        // Hafta içi 09:00 - 18:00 arası "Aktif Mesai"
         if (day === 0 || day === 6) return false;
         return hour >= 9 && hour < 18;
     };
@@ -235,7 +237,28 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // --- ACTIONS ---
 
-    const performAutoReplyDrafting = async (leads: Lead[]): Promise<boolean> => {
+    // NEW: Lead Sanitization Action (Maintenance)
+    const performLeadSanitization = async (leads: Lead[]): Promise<boolean> => {
+        // Find leads with invalid data that are marked as 'active' or 'waiting'
+        const dirtyLead = leads.find(l => {
+            const isInvalidEmail = l.email && (!l.email.includes('@') || l.email.length < 5 || l.email.includes('null') || l.email.includes('undefined'));
+            // If it has email but it's clearly garbage, OR if it has NO contact info at all and isn't new
+            const isDead = !l.email && !l.telefon && l.lead_durumu !== 'gecersiz';
+            
+            return (isProspectLead(l) && isInvalidEmail) || isDead;
+        });
+
+        if (dirtyLead) {
+            const updatedLead = { ...dirtyLead, lead_durumu: 'gecersiz' as any, notlar: dirtyLead.notlar + '\n[Sistem]: Geçersiz iletişim bilgisi nedeniyle pasife alındı.' };
+            await api.leads.update(updatedLead);
+            setAgentStatus(`Veri Temizliği: ${dirtyLead.firma_adi}`);
+            addThought('decision', `${dirtyLead.firma_adi} iletişim bilgileri bozuk olduğu için 'Geçersiz' olarak işaretlendi.`);
+            return true;
+        }
+        return false;
+    };
+
+    const performAutoReplyDrafting = async (leads: Lead[], draftOnly: boolean = false): Promise<boolean> => {
         const targets = leads.filter(l => 
             (l.lead_durumu === 'takipte' || l.lead_durumu === 'teklif_gonderildi') &&
             !l.draftResponse && 
@@ -269,7 +292,8 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 lead_durumu: 'onay_bekliyor'
             };
 
-            if (lead.email) {
+            // If we are allowed to send (business hours) AND email exists
+            if (!draftOnly && lead.email) {
                 const response = await api.gmail.send(lead.email, draftSubject, draftContent);
                 await api.leads.logInteraction(lead.id, 'email', `Otomatik takip yanıtı: ${draftSubject}`);
                 await api.leads.update({
@@ -288,8 +312,9 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 return true;
             }
 
+            // Otherwise, just save as draft
             await api.leads.update(updatedLead);
-            addThought('warning', `${lead.firma_adi} email olmadığı için taslak onaya bırakıldı.`);
+            addThought('info', `${lead.firma_adi} için yanıt taslağı hazırlandı ve onaya sunuldu (Gönderilmedi).`);
             return true;
         } catch (e) {
             console.error(e);
@@ -582,45 +607,56 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         try {
             const leads = await api.leads.getAll();
             let actionTaken = false;
+            const isDaytime = isBusinessHours();
 
-            // PRIORITY 1: Reply Drafting
-            if (!actionTaken) actionTaken = await performAutoReplyDrafting(leads);
+            // --- PRIORITY 1: MAINTENANCE & CLEANUP (Safe 24/7) ---
+            // If we have bad data, clean it first before doing anything else.
+            if (!actionTaken) actionTaken = await performLeadSanitization(leads);
 
-            // PRIORITY 2: Outreach (Fully Autonomous)
-            if (!actionTaken) {
-                actionTaken = await performOutreach(leads);
-            }
-
-            // PRIORITY 3: Enrichment (High Score Leads)
+            // --- PRIORITY 2: ENRICHMENT (Safe 24/7) ---
+            // Find emails for existing leads
             if (!actionTaken) actionTaken = await performAutoEnrichment(leads);
 
-            // PRIORITY 4: Discovery (Pipeline Refill)
+            // --- PRIORITY 3: DISCOVERY (Safe 24/7) ---
+            // Refill pipeline if low
             if (!actionTaken) actionTaken = await performSmartDiscovery(leads);
+
+            // --- PRIORITY 4: ACTIVE COMMUNICATION (Daytime Only) ---
+            if (isDaytime) {
+                if (!actionTaken) actionTaken = await performAutoReplyDrafting(leads, false); // Send allowed
+                if (!actionTaken) actionTaken = await performOutreach(leads);
+            } else {
+                // NIGHT MODE: Draft but DO NOT SEND
+                // This prepares the inbox for the next morning
+                if (!actionTaken) actionTaken = await performAutoReplyDrafting(leads, true); // Draft only
+            }
 
             if (actionTaken) {
                 burstStreakRef.current += 1;
                 
                 // --- FIX: AUTO RESUME MECHANISM ---
-                // Instead of stopping safely, pause for cooldown if burst limit reached
                 if (burstStreakRef.current > 30) {
                     setAgentStatus("Aşırı yüklenme algılandı. Soğuma modu aktif (1dk)...");
                     addThought('warning', "İşlem yoğunluğu çok yüksek. Sistem kendini 60 saniye soğumaya alıyor...");
                     
-                    // Reset streak and resume after delay
                     setTimeout(() => {
                         burstStreakRef.current = 0;
                         if (isRunningRef.current) {
                             addThought('info', "Soğuma tamamlandı. Otopilot tekrar devreye giriyor.");
                             agentLoop();
                         }
-                    }, 60000); // Reduced to 1 minute pause
-                    return; // Exit current loop instance
+                    }, 60000); 
+                    return; 
                 }
 
-                setAgentStatus(`Burst Mode x${burstStreakRef.current}: İşlem tamamlandı, yeni tur hazırlanıyor...`);
+                setAgentStatus(`Aktif İşlem (x${burstStreakRef.current})...`);
                 loopTimeoutRef.current = setTimeout(agentLoop, BURST_INTERVAL);
             } else {
-                setAgentStatus(isBusinessHours() ? 'Analiz Ediliyor... (Uygun Aksiyon Yok)' : 'Mesai Dışı (Uyku Modu)');
+                if (isDaytime) {
+                    setAgentStatus('Beklemede (İşlem Yok)...');
+                } else {
+                    setAgentStatus('Gece Vardiyası: Keşif & Bakım Modu');
+                }
                 burstStreakRef.current = 0;
                 loopTimeoutRef.current = setTimeout(agentLoop, IDLE_INTERVAL);
             }

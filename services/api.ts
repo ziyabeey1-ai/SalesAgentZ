@@ -16,10 +16,14 @@ const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 const BLOCKED_EMAIL_FRAGMENTS = ['example.com', 'email.com', 'test@', 'noreply@', 'no-reply@'];
 const FREE_EMAIL_DOMAINS = new Set(['gmail.com', 'hotmail.com', 'outlook.com', 'yahoo.com', 'yandex.com']);
 
-// NEW: Public domains to skip advanced validation (Optimization)
+// NEW: Public domains to skip advanced validation
 const COMMON_PUBLIC_EMAIL_DOMAINS = new Set([
     'gmail.com', 'googlemail.com', 'hotmail.com', 'outlook.com', 'live.com', 'msn.com',
     'yahoo.com', 'yandex.com', 'icloud.com', 'me.com', 'mac.com', 'proton.me', 'protonmail.com'
+]);
+
+const KNOWN_INVALID_DOMAINS = new Set([
+    'example.com', 'email.com', 'test.com', 'localhost', 'localdomain'
 ]);
 
 const normalizeEmail = (email: string): string => email.trim().toLowerCase();
@@ -32,12 +36,10 @@ const isValidLeadEmail = (email: string): boolean => {
 const isHighConfidenceFreeEmail = (email: string, confidenceScore?: number, source?: string): boolean => {
     const domain = normalizeEmail(email).split('@')[1] || '';
     if (!FREE_EMAIL_DOMAINS.has(domain)) return true;
-    // Free e-mail adreslerinde (özellikle gmail) yanlış/terkedilmiş adres riski daha yüksek.
-    // Bu yüzden daha yüksek skor ve görünür bir kaynak zorunlu tutuyoruz.
     return (confidenceScore || 0) >= 90 && Boolean(source);
 };
 
-// --- DOMAIN VALIDATION HELPERS ---
+type DomainCheckResult = 'valid' | 'invalid' | 'unknown';
 
 const extractEmailDomain = (email: string): string | null => {
     const normalized = (email || '').trim().toLowerCase();
@@ -45,6 +47,12 @@ const extractEmailDomain = (email: string): string | null => {
     if (atIndex === -1 || atIndex === normalized.length - 1) return null;
     const domain = normalized.slice(atIndex + 1).trim();
     return domain || null;
+};
+
+const hasValidDomainFormat = (domain: string): boolean => {
+    if (!domain || domain.includes(' ') || !domain.includes('.')) return false;
+    if (KNOWN_INVALID_DOMAINS.has(domain)) return false;
+    return /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(domain);
 };
 
 const fetchWithTimeout = async (url: string, timeoutMs: number, init?: RequestInit) => {
@@ -57,75 +65,72 @@ const fetchWithTimeout = async (url: string, timeoutMs: number, init?: RequestIn
     }
 };
 
-const hasResolvableDns = async (domain: string): Promise<boolean> => {
+const hasResolvableDns = async (domain: string): Promise<DomainCheckResult> => {
     try {
-        // Use Google's Public DNS API to check if domain exists (Look for A record)
         const dnsUrl = `https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=A`;
         const res = await fetchWithTimeout(dnsUrl, 4000, { headers: { Accept: 'application/json' } });
-        
-        if (!res.ok) return false; // Network error or blocked
-        
+        if (!res.ok) return 'unknown';
         const data = await res.json();
-        // Status 0 means NOERROR (Success). If Answer array exists, domain has records.
-        // Status 3 means NXDOMAIN (Domain does not exist).
-        return data.Status === 0 && Array.isArray(data?.Answer) && data.Answer.length > 0;
+
+        if (data?.Status === 3) return 'invalid'; // NXDOMAIN
+        if (Array.isArray(data?.Answer) && data.Answer.length > 0) return 'valid';
+        return 'unknown';
     } catch {
-        // If fetch fails (e.g. strict CSP or network), assume true to not block potentially valid emails
-        // or return false if you want strict fail-closed. Here we choose fail-open for network errors but strict for DNS errors.
-        return false; 
+        // CORS/Network hatalarında gönderimi kilitleme (fail-open)
+        return 'unknown';
     }
 };
 
-const isWebsiteReachable = async (domain: string): Promise<boolean> => {
+const isWebsiteReachable = async (domain: string): Promise<DomainCheckResult> => {
     const candidates = [`https://${domain}`, `https://www.${domain}`];
+
     for (const url of candidates) {
         try {
-            // no-cors: Cross origin kısıtlarında bile ağ katmanında erişim denemesi yapar.
-            // Opaque response döner ama network hatası vermezse sunucu vardır.
             await fetchWithTimeout(url, 5000, { method: 'GET', mode: 'no-cors', redirect: 'follow' });
-            return true;
+            return 'valid';
         } catch {
-            // sıradaki adrese geç
+            // sıradaki URL'e geç
         }
     }
-    return false;
+
+    // Tarayıcı CORS veya kısa süreli ağ probleminde gönderimi bloklamayalım
+    return 'unknown';
 };
 
 const validateRecipientDomainBeforeSend = async (recipientEmail: string) => {
     const domain = extractEmailDomain(recipientEmail);
-    // If invalid format or public domain, skip complex checks
-    if (!domain || COMMON_PUBLIC_EMAIL_DOMAINS.has(domain)) return;
+    if (!domain) throw new Error(`ALICI_EMAIL_GECERSIZ:${recipientEmail}`);
 
-    // 1. DNS Check (Is the domain registered?)
-    const dnsOk = await hasResolvableDns(domain);
-    if (!dnsOk) {
-        throw new Error(`ALICI_DOMAIN_DNS_HATASI: '${domain}' bulunamadı. Lütfen adresi kontrol edin.`);
+    if (!hasValidDomainFormat(domain)) {
+        throw new Error(`ALICI_DOMAIN_FORMAT_GECERSIZ:${domain}`);
     }
 
-    // 2. Reachability Check (Is the server active?)
-    // Note: Some mail servers don't have web servers, but for B2B usually they do.
-    // We can make this optional or a warning. For now, strict.
-    const websiteOk = await isWebsiteReachable(domain);
-    if (!websiteOk) {
-        console.warn(`Uyarı: '${domain}' web sitesine erişilemedi, ancak DNS kaydı var. Mail gönderimi devam ediyor.`);
-        // We don't throw here to avoid blocking valid mail-only domains, but we warn.
+    if (COMMON_PUBLIC_EMAIL_DOMAINS.has(domain)) return;
+
+    const dnsResult = await hasResolvableDns(domain);
+    if (dnsResult === 'invalid') {
+        throw new Error(`ALICI_DOMAIN_DNS_HATASI:${domain}`);
+    }
+
+    const websiteResult = await isWebsiteReachable(domain);
+    if (websiteResult === 'invalid') {
+        throw new Error(`ALICI_WEBSITE_ERISILEMIYOR:${domain}`);
+    }
+
+    if (dnsResult === 'unknown' || websiteResult === 'unknown') {
+        console.warn(`[DOMAIN CHECK] Ağ/CORS nedeniyle kesin doğrulama yapılamadı, gönderime izin verildi: ${domain}`);
     }
 };
 
 const parseGeminiJson = (text: string) => {
     try {
         if (!text) return {};
-        // Remove markdown code blocks
         let clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
-        
-        // Find the first '{' and last '}' to ensure we have a valid JSON object structure
         const firstBrace = clean.indexOf('{');
         const lastBrace = clean.lastIndexOf('}');
-        
         if (firstBrace !== -1 && lastBrace !== -1) {
             clean = clean.substring(firstBrace, lastBrace + 1);
         }
-
         return JSON.parse(clean);
     } catch (e) {
         console.warn("JSON Parse Error (Recovered):", e);
@@ -133,16 +138,13 @@ const parseGeminiJson = (text: string) => {
     }
 };
 
-// --- NEW HELPER: Force Replace Placeholders & Fix Formatting ---
 const cleanAIResponse = (text: string, lead: Lead, profile: UserProfile): string => {
     if (!text) return "";
     let clean = text;
 
-    // 1. Replace User/Sender Placeholders (Common AI Hallucinations)
     const myName = profile.fullName || 'Satış Temsilcisi';
     const myCompany = profile.companyName || 'Ajansımız';
     
-    // Aggressive Regex for bracketed placeholders
     clean = clean.replace(/\[Senin Adın\]/gi, myName);
     clean = clean.replace(/\[Adınız\]/gi, myName);
     clean = clean.replace(/\[İsminiz\]/gi, myName);
@@ -151,7 +153,6 @@ const cleanAIResponse = (text: string, lead: Lead, profile: UserProfile): string
     clean = clean.replace(/\[Ajans Adı\]/gi, myCompany);
     clean = clean.replace(/\[Şirketiniz\]/gi, myCompany);
 
-    // 2. Replace Lead/Target Placeholders
     const leadName = lead.firma_adi || 'Firma';
     const contactName = lead.yetkili_adi || 'Sayın Yetkili';
     
@@ -219,7 +220,6 @@ export const api = {
     },
     discover: async (sector: string, district: string): Promise<Lead[]> => {
         const ai = new GoogleGenAI({ apiKey: getApiKey() });
-        // STRICTOR PROMPT TO PREVENT FAKE EMAILS AND ENSURE QUALITY
         const prompt = `
             SİSTEM ROLÜ: Titiz Lead Araştırmacısı.
             GÖREV: İstanbul, ${district} bölgesindeki "${sector}" sektöründe hizmet veren aktif işletmeleri bul.
@@ -316,9 +316,7 @@ export const api = {
   },
   gmail: {
       send: async (to: string, subject: string, body: string, attachments?: any[]) => {
-          // Perform strict domain validation before attempting to send
           await validateRecipientDomainBeforeSend(to);
-          
           gamificationService.recordAction('email_sent');
           if (canUseGoogleWorkspaceApis()) {
               const res = await gmailService.sendEmail(to, subject, body, attachments);
@@ -384,8 +382,6 @@ export const api = {
       
       generateColdEmail: async (lead: Lead) => {
           const ai = new GoogleGenAI({ apiKey: getApiKey() });
-          
-          // Fetch fresh User Profile
           const userProfile = storage.getUserProfile();
           
           let personaContext = "";
@@ -400,7 +396,6 @@ export const api = {
               personaContext = "Alıcı profili bilinmiyor, genel ve profesyonel bir dil kullan.";
           }
 
-          // Build Sender Context from Profile
           const senderContext = `
             GÖNDEREN KİMLİĞİ (SEN BU KİŞİSİN):
             Ad Soyad: ${userProfile.fullName || 'Satış Temsilcisi'}
@@ -437,16 +432,11 @@ export const api = {
             const response = await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: prompt, config: { responseMimeType: 'application/json' } });
             const result = parseGeminiJson(response.text || '{}');
             
-            // --- STEP 1: FORCE CLEAN PLACEHOLDERS ---
-            // Even if AI hallucinates, we scrub placeholders
             result.subject = cleanAIResponse(result.subject, lead, userProfile);
             result.body = cleanAIResponse(result.body, lead, userProfile);
             
-            // --- STEP 2: PROGRAMMATIC SIGNATURE INJECTION ---
-            // This guarantees the signature is present and correct, regardless of AI output
             const signature = `\n\nSaygılarımla,\n\n${userProfile.fullName}\n${userProfile.role}\n${userProfile.companyName}\n${userProfile.website || ''}`;
             
-            // Only append if it doesn't already seem to have the name at the end
             if (!result.body.includes(userProfile.fullName)) {
                 result.body += signature;
             }
@@ -455,7 +445,6 @@ export const api = {
 
           } catch (e) {
             console.error("Cold Email Generation Failed", e);
-            // Fallback with profile data
             const signature = `\n\nSaygılarımla,\n\n${userProfile.fullName}\n${userProfile.role}\n${userProfile.companyName}`;
             return { 
                 subject: `Merhaba ${lead.firma_adi}`, 
