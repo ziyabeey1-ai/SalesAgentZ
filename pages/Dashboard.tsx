@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useRef } from 'react';
 import { 
   Building2, 
@@ -44,14 +43,11 @@ const Dashboard: React.FC = () => {
   const [sendingReport, setSendingReport] = useState(false);
   const [chartData, setChartData] = useState<any[]>([]);
   
-  // Connect to Agent Context for Live Thoughts
   const { thoughts, isAgentRunning, toggleAgent } = useAgent();
   const thoughtsEndRef = useRef<HTMLDivElement>(null);
   
-  // Audio Briefing State
   const [briefingStatus, setBriefingStatus] = useState<'idle' | 'loading' | 'playing'>('idle');
 
-  // Strategy Insights State
   const [insights, setInsights] = useState<any[]>([]);
   const [loadingInsights, setLoadingInsights] = useState(false);
   const [isGeminiConfigured, setIsGeminiConfigured] = useState(false);
@@ -78,7 +74,6 @@ const Dashboard: React.FC = () => {
             setStats(statsData);
             setLeads(leadsData);
             
-            // Map report weekly trend to chart format
             const mappedChartData = reportData.weeklyTrend.map((item: any) => ({
                 name: item.name,
                 sent: item.sent,
@@ -98,7 +93,6 @@ const Dashboard: React.FC = () => {
     fetchDashboardData();
   }, []);
 
-  // Auto-scroll terminal
   useEffect(() => {
       if (thoughtsEndRef.current) {
           thoughtsEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -172,7 +166,6 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Header Actions */}
       <div className="flex justify-end mb-4 gap-3">
           <button 
             onClick={handlePlayBriefing}
@@ -198,7 +191,6 @@ const Dashboard: React.FC = () => {
           </button>
       </div>
 
-      {/* Top Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between">
@@ -261,7 +253,6 @@ const Dashboard: React.FC = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* LIVE NEURO-TERMINAL (Replaces Action Log) */}
         <div className="lg:col-span-2 bg-slate-900 rounded-2xl shadow-xl overflow-hidden flex flex-col border border-slate-800 h-[400px]">
             <div className="p-4 border-b border-slate-800 bg-slate-950 flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -273,7 +264,7 @@ const Dashboard: React.FC = () => {
                 </div>
                 <div className="flex items-center gap-3">
                     <span className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">
-                        GEMINI-2.5-FLASH-PREVIEW // {isGeminiConfigured ? 'CONFIGURED' : 'API KEY MISSING'}
+                        GEMINI-3-FLASH-PREVIEW // {isGeminiConfigured ? 'CONFIGURED' : 'API KEY MISSING'}
                     </span>
                     <button 
                         onClick={toggleAgent}
@@ -286,7 +277,6 @@ const Dashboard: React.FC = () => {
             </div>
             
             <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-3 bg-slate-900/50 relative">
-                {/* Background Grid */}
                 <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5 pointer-events-none"></div>
                 
                 {thoughts.length === 0 ? (
@@ -320,9 +310,7 @@ const Dashboard: React.FC = () => {
             </div>
         </div>
 
-        {/* AI STRATEGY WIDGET (Compact) */}
         <div className="relative rounded-2xl shadow-xl p-6 text-white overflow-hidden group h-[400px] flex flex-col bg-gradient-to-br from-indigo-900 to-purple-900">
-            {/* Glass Background */}
             <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10"></div>
             <div className="absolute -top-24 -right-24 w-64 h-64 bg-white rounded-full blur-[100px] opacity-10"></div>
 
@@ -367,7 +355,6 @@ const Dashboard: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Charts */}
         <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
           <div className="flex items-center justify-between mb-6">
             <h3 className="font-semibold text-slate-800">Günlük Etkileşim Analizi</h3>
@@ -390,7 +377,6 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Regional Performance Table */}
         <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm flex flex-col">
           <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
               <MapPin size={18} className="text-indigo-600"/> Bölgesel Hakimiyet

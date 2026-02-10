@@ -20,6 +20,9 @@ export const SECTORS = [
 ];
 
 export const DISTRICTS = [
+  'Bahçeşehir',
+  'Esenyurt',
+  'Beylikdüzü',
   'Kadıköy',
   'Beşiktaş',
   'Şişli',
@@ -31,6 +34,9 @@ export const DISTRICTS = [
 
 // Approximate coordinates for Istanbul districts to calculate distance without API cost
 export const DISTRICT_COORDINATES: Record<string, { lat: number, lng: number }> = {
+  'Bahçeşehir': { lat: 41.0637, lng: 28.6826 },
+  'Esenyurt': { lat: 41.0343, lng: 28.6801 },
+  'Beylikdüzü': { lat: 41.0025, lng: 28.6433 },
   'Kadıköy': { lat: 40.9818, lng: 29.0576 },
   'Beşiktaş': { lat: 41.0422, lng: 29.0060 },
   'Şişli': { lat: 41.0529, lng: 28.9817 },

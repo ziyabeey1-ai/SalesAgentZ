@@ -1,4 +1,3 @@
-
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../services/api';
 import { Lead, AgentConfig, AgentThought } from '../types';
@@ -21,7 +20,7 @@ interface AgentContextType {
   toggleAgent: () => void;
   agentStatus: string; 
   notifications: Notification[];
-  thoughts: AgentThought[]; // New: Expose thoughts
+  thoughts: AgentThought[]; 
   addNotification: (title: string, message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
   dismissNotification: (id: string) => void;
   runCycleNow: () => Promise<void>;
@@ -33,9 +32,8 @@ interface AgentContextType {
 }
 
 const AgentContext = createContext<AgentContextType | undefined>(undefined);
-const AGENT_MODEL = 'gemini-2.5-flash-preview';
+const AGENT_MODEL = 'gemini-3-flash-preview';
 
-// Helper to get API Key (Updated to prioritize geminiApiKey)
 const getApiKey = () => {
     if (process.env.API_KEY) return process.env.API_KEY;
     const geminiKey = localStorage.getItem('geminiApiKey');
@@ -43,7 +41,6 @@ const getApiKey = () => {
     return localStorage.getItem('apiKey') || '';
 };
 
-// Reusable Robust JSON Parser
 const parseGeminiJson = (text: string) => {
     const normalizeJsonText = (input: string) => {
         let clean = input.replace(/```json/g, '').replace(/```/g, '').trim();
@@ -53,20 +50,16 @@ const parseGeminiJson = (text: string) => {
     };
 
     try {
-        // 1. Try direct parse
         return JSON.parse(text);
     } catch (e) {
-        // 2. Extract from code blocks + normalization
         let clean = normalizeJsonText(text);
         try {
             return JSON.parse(clean);
         } catch (e2) {
-            // 3. Replace single-quoted strings with double quotes (Risky but necessary fallback for bad LLM output)
             const withDoubleQuotes = clean.replace(/'([^']*)'/g, '"$1"');
             try {
                 return JSON.parse(withDoubleQuotes);
             } catch (e3) {
-                // 4. Regex extraction (Find first [ or { and last ] or })
                 const match = withDoubleQuotes.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
                 if (match) {
                     try {
@@ -102,21 +95,31 @@ const formatAiError = (error: unknown) => {
     const raw = error instanceof Error ? error.message : String(error);
     const lower = raw.toLowerCase();
 
-    if (lower.includes('google search') || lower.includes('tool') || lower.includes('not supported')) {
-        return 'Google Search aracı bu API anahtarında yetkili olmayabilir.';
+    if (lower.includes('google search') || lower.includes('grounding')) {
+        return 'Google Search aracı bu API anahtarında yetkili değil (Grounding hatası).';
     }
-    if (lower.includes('model') && (lower.includes('not found') || lower.includes('not supported') || lower.includes('permission denied'))) {
-        return `Seçilen model (${AGENT_MODEL}) erişilebilir değil. Ayarlar/testte çalışan modeli kullanın.`;
+    if (lower.includes('model') || lower.includes('not found') || lower.includes('404')) {
+        return `Seçilen model (${AGENT_MODEL}) bulunamadı veya erişim yok (404).`;
     }
-    if (lower.includes('api key') || lower.includes('invalid_argument') || lower.includes('unauthenticated') || lower.includes('401')) {
-        return 'API anahtarı geçersiz/eksik olabilir. Ayarlar > Gemini API Key alanını kontrol edin.';
+    if (lower.includes('api key') || lower.includes('invalid_argument') || lower.includes('unauthenticated') || lower.includes('401') || lower.includes('403') || lower.includes('permission denied')) {
+        return 'API anahtarı geçersiz veya yetkisiz (403/401).';
     }
     if (lower.includes('quota') || lower.includes('429') || lower.includes('rate limit') || lower.includes('resource exhausted')) {
-        return 'Gemini kota/limit aşıldı. Birkaç dakika sonra tekrar deneyin.';
+        return 'Kota aşıldı (429).';
+    }
+    if (lower.includes('not supported')) {
+        return 'Bu işlem/model desteklenmiyor.';
     }
 
     return raw;
 };
+
+// Strategy Rotation State
+const SEARCH_STRATEGIES = [
+    { id: 'new_business', label: 'Yeni Açılanlar', promptSuffix: 'Yeni açılmış veya web sitesi olmayan işletmeleri bul.' },
+    { id: 'bad_site', label: 'Eski Web Sitesi', promptSuffix: 'Web sitesi olan AMA tasarımı çok eski veya mobil uyumsuz olanları bul.' },
+    { id: 'social_only', label: 'Sadece Instagram', promptSuffix: 'Popüler ama web sitesi yerine sadece Instagram/Linktree kullananları bul.' }
+];
 
 export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
   const [isAgentRunning, setIsAgentRunning] = useState(false); 
@@ -125,18 +128,17 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
   const [pendingDraftsCount, setPendingDraftsCount] = useState(0);
   const [thoughts, setThoughts] = useState<AgentThought[]>([]);
   
-  // Agent Configuration
   const [agentConfig, setAgentConfig] = useState<AgentConfig>({
       targetDistrict: 'Tümü',
       targetSector: 'Tümü',
       focusMode: 'balanced'
   });
 
-  // Usage Tracking state for UI
   const [usageStats, setUsageStats] = useState(storage.getUsage());
   
   const isRunningRef = useRef(isAgentRunning);
   const configRef = useRef(agentConfig);
+  const strategyIndexRef = useRef(0); // To cycle strategies
   
   useEffect(() => {
       isRunningRef.current = isAgentRunning;
@@ -161,7 +163,6 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
       }
   };
 
-  // --- LOGGING HELPER ---
   const addThought = (type: AgentThought['type'], message: string, metadata?: any) => {
       const newThought: AgentThought = {
           id: Math.random().toString(36).substr(2, 9),
@@ -170,23 +171,18 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
           message,
           metadata
       };
-      setThoughts(prev => [newThought, ...prev].slice(0, 50)); // Keep last 50 thoughts
+      setThoughts(prev => [newThought, ...prev].slice(0, 50)); 
   };
 
-  // --- HELPER: BUSINESS HOURS CHECK ---
   const isBusinessHours = () => {
       const now = new Date();
-      const day = now.getDay(); // 0 = Sunday, 6 = Saturday
+      const day = now.getDay(); 
       const hour = now.getHours();
-      
-      // Work days (Mon-Fri) and Hours (09:00 - 18:00)
       const isWorkDay = day !== 0 && day !== 6;
       const isWorkHour = hour >= 9 && hour < 18;
-
       return isWorkDay && isWorkHour;
   };
 
-  // Initial Startup Logic
   useEffect(() => {
       const init = async () => {
           await checkPendingDrafts();
@@ -247,23 +243,38 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
       return true;
   };
 
-  // --- AI WORKER FUNCTIONS ---
-
   const performAutoDiscovery = async () => {
       if (!checkAndIncrementCost()) return;
 
       const { targetDistrict, targetSector } = configRef.current;
-      const districtToSearch = targetDistrict === 'Tümü' ? DISTRICTS[Math.floor(Math.random() * DISTRICTS.length)] : targetDistrict;
+      
+      // PRIORITIZE PRIORITY DISTRICTS
+      const PRIORITY_DISTRICTS = ['Bahçeşehir', 'Esenyurt', 'Beylikdüzü'];
+      let districtToSearch = targetDistrict;
+      if (targetDistrict === 'Tümü') {
+          // 50% chance to pick from priority districts if iterating randomly
+          if (Math.random() > 0.5) {
+              districtToSearch = PRIORITY_DISTRICTS[Math.floor(Math.random() * PRIORITY_DISTRICTS.length)];
+          } else {
+              districtToSearch = DISTRICTS[Math.floor(Math.random() * DISTRICTS.length)];
+          }
+      }
+
       const sectorToSearch = targetSector === 'Tümü' ? SECTORS[Math.floor(Math.random() * SECTORS.length)] : targetSector;
       
-      setAgentStatus(`${districtToSearch} bölgesinde ${sectorToSearch} taranıyor...`);
-      addThought('action', `${districtToSearch} bölgesinde ${sectorToSearch} sektöründe yeni KOBİ taraması başlatıldı.`);
+      // ROTATE STRATEGY
+      const currentStrategy = SEARCH_STRATEGIES[strategyIndexRef.current % SEARCH_STRATEGIES.length];
+      strategyIndexRef.current++; // Move to next for next cycle
+
+      setAgentStatus(`${districtToSearch} - ${currentStrategy.label} taranıyor...`);
+      addThought('action', `Strateji: ${currentStrategy.label} | Bölge: ${districtToSearch} | Sektör: ${sectorToSearch}`);
       
       try {
         const ai = getAiClient();
         
         const prompt = `
-            GÖREV: İstanbul ${districtToSearch} bölgesinde "${sectorToSearch}" sektöründe hizmet veren, web sitesi olmayan veya yenilenmeye ihtiyacı olan 2 adet YEREL işletme bul.
+            GÖREV: İstanbul ${districtToSearch} bölgesinde "${sectorToSearch}" sektöründe hizmet veren YEREL işletmeler bul.
+            STRATEJİ: ${currentStrategy.promptSuffix}
             
             KURALLAR:
             1. Zincir marketleri, hastaneleri, kurumsal büyük firmaları ELE. Sadece esnaf/KOBİ bul.
@@ -276,7 +287,6 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
         let data: any[] = [];
         let primaryError: unknown = null;
         
-        // Attempt 1: With Google Search (Preferred)
         try {
             const result = await ai.models.generateContent({
                 model: AGENT_MODEL,
@@ -289,19 +299,22 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
             data = parseGeminiJson(extractGeminiText(result) || '[]');
         } catch (error) {
             primaryError = error;
-            // Attempt 2: Fallback (No Tools, No JSON enforcement for better compatibility)
             const fallbackPrompt = `${prompt}\n\nYANIT: SADECE JSON. Başka metin yazma.`;
             try {
                 const fallbackResult = await ai.models.generateContent({
                     model: AGENT_MODEL,
                     contents: fallbackPrompt,
-                    // Note: responseMimeType removed to avoid 400 errors on some models/keys
+                    // Note: No tools, no responseMimeType to maximize compatibility
                 });
-                data = parseGeminiJson(extractGeminiText(fallbackResult) || '[]');
+                const text = extractGeminiText(fallbackResult);
+                if (text) {
+                    data = parseGeminiJson(text);
+                    addThought('warning', 'Google Arama (Search) başarısız oldu, simülasyon verisi kullanılıyor.');
+                }
             } catch (fallbackError) {
                 const primaryMessage = formatAiError(primaryError);
                 const fallbackMessage = formatAiError(fallbackError);
-                throw new Error(`Birincil keşif isteği başarısız: ${primaryMessage} | Fallback isteği başarısız: ${fallbackMessage}`);
+                throw new Error(`Keşif Hatası (Search): ${primaryMessage} || Yedek Hatası: ${fallbackMessage}`);
             }
         }
 
@@ -320,12 +333,12 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
                         telefon: '',
                         email: '',
                         kaynak: 'Google Maps' as any,
-                        websitesi_var_mi: 'Hayır',
+                        websitesi_var_mi: currentStrategy.id === 'new_business' ? 'Hayır' : 'Evet', // Assumption based on strategy
                         lead_durumu: 'aktif',
                         lead_skoru: 1,
                         eksik_alanlar: ['email', 'telefon'],
                         son_kontakt_tarihi: new Date().toISOString().slice(0, 10),
-                        notlar: 'Otopilot tarafından keşfedildi.'
+                        notlar: `Otopilot tarafından keşfedildi (${currentStrategy.label}).`
                     };
                     await api.leads.create(newLead);
                     addedCount++;
@@ -343,8 +356,8 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
         }
       } catch (e) { 
           console.error("Auto discovery failed", e);
-          const message = formatAiError(e);
-          addThought('error', `Keşif işlemi sırasında hata oluştu: ${message}`);
+          const message = e instanceof Error ? e.message : String(e);
+          addThought('error', `${message}`);
       }
   };
 
@@ -367,42 +380,39 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
       try {
           const ai = getAiClient();
           const prompt = `"${target.firma_adi}" (${target.ilce}, ${target.sektor}) için telefon ve e-posta bul. JSON: { "telefon": "...", "email": "..." }`;
+          const result = await ai.models.generateContent({
+            model: AGENT_MODEL,
+            contents: prompt,
+            config: { 
+                tools: [{ googleSearch: {} }],
+                responseMimeType: 'application/json' 
+            }
+          });
           
-          let textResult = "";
-          try {
-              const result = await ai.models.generateContent({
-                model: AGENT_MODEL,
-                contents: prompt,
-                config: { 
-                    tools: [{ googleSearch: {} }],
-                    responseMimeType: 'application/json' 
-                }
-              });
-              textResult = extractGeminiText(result);
-          } catch (searchError) {
-              // Fallback
-              const result = await ai.models.generateContent({
-                  model: AGENT_MODEL,
-                  contents: prompt + " (Tahmini veya simülasyon veri üret)"
-              });
-              textResult = extractGeminiText(result);
-          }
+          const data = parseGeminiJson(extractGeminiText(result) || '{}');
           
-          const data = parseGeminiJson(textResult || '{}');
-          
-          if (data.telefon || data.email) {
+          if (data.email) {
               const updatedLead = {
                   ...target,
                   telefon: target.telefon || data.telefon || '',
                   email: target.email || data.email || '',
                   eksik_alanlar: target.eksik_alanlar.filter(f => (data.email && f === 'email') ? false : (data.telefon && f === 'telefon') ? false : true)
               };
-              updatedLead.lead_skoru += (data.email ? 2 : 0) + (data.telefon ? 1 : 0);
+              updatedLead.lead_skoru += 2; // Email found is a big plus
               await api.leads.update(updatedLead);
-              addThought('success', `${target.firma_adi} verileri güncellendi: ${data.email ? 'Email' : ''} ${data.telefon ? 'Tel' : ''}`);
+              addThought('success', `${target.firma_adi} verileri güncellendi: Email bulundu.`);
               return true;
           } else {
-              addThought('analysis', `${target.firma_adi} için web'de yeni bilgi bulunamadı.`);
+              // NO EMAIL FOUND LOGIC
+              // User wants to skip landline-only leads to save time.
+              const updatedLead = {
+                  ...target,
+                  lead_durumu: 'gecersiz' as any, // Mark as invalid/skipped
+                  notlar: (target.notlar || '') + '\n[Otopilot]: Email bulunamadı, zaman kaybını önlemek için atlandı.'
+              };
+              await api.leads.update(updatedLead);
+              addThought('decision', `${target.firma_adi} için e-posta bulunamadı. Vakit kaybetmemek için lead pas geçildi.`);
+              return true; // Action taken (skipping is an action)
           }
       } catch (e) {
           console.error("Enrichment failed", e);
@@ -412,7 +422,12 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
       return false;
   };
 
+  // DISABLED FOR NOW AS PER REQUEST
   const performAutoVisuals = async (leads: Lead[]) => {
+      // User feedback: "Visual generation is too fast and low quality, skip it."
+      // We return false effectively disabling this step in the loop.
+      return false;
+      /* 
       const candidates = leads.filter(l => 
           l.lead_durumu === 'aktif' &&
           l.email && 
@@ -439,6 +454,7 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
           addThought('error', 'Görsel üretimi başarısız oldu.');
       }
       return false;
+      */
   };
 
   const performAutoSocial = async (leads: Lead[]) => {
@@ -484,8 +500,8 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
           (targetSector === 'Tümü' || l.sektor === targetSector)
       );
 
-      // Prioritize leads with Visuals prepared
-      const target = readyLeads.find(l => l.generatedHeroImage) || readyLeads[0];
+      // Prioritize leads with Instagram data (since visuals are disabled)
+      const target = readyLeads.find(l => l.instagramProfile) || readyLeads[0];
       
       if (!target) return false;
 
@@ -494,23 +510,19 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
 
       try {
            let attachments: any[] = [];
-           if (target.generatedHeroImage) {
-               const base64Content = target.generatedHeroImage.split(',')[1];
-               attachments.push({
-                   filename: 'taslak_tasarim.png',
-                   content: base64Content,
-                   mimeType: 'image/png'
-               });
-           }
+           // Visuals are disabled, so we don't attach generated images anymore.
+           // Maybe attach a generic brochure later?
 
-           let subject = `[${target.firma_adi}] Web Sitesi Taslağı Hazır 🎨`;
-           let body = `Merhaba, ${target.firma_adi} için modern bir web sitesi demosu hazırladım.\n\nEkteki görseli inceleyebilir misiniz?\n\n`;
+           let subject = `[${target.firma_adi}] Dijital Fırsat Analizi 🚀`;
+           let body = `Merhaba, ${target.firma_adi} yöneticisi,\n\nİstanbul ${target.ilce} bölgesindeki işletmeleri incelerken firmanızı fark ettim.\n\n`;
            
            if (target.instagramProfile?.suggestedDmOpener) {
-               body = `${target.instagramProfile.suggestedDmOpener}\n\n` + body;
+               body += `Instagram sayfanızı (${target.instagramProfile.username}) inceledim, gerçekten güzel bir kitleye hitap ediyorsunuz. Ancak bu kitleyi bir web sitesi ile satışa dönüştürme fırsatını kaçırıyor olabilirsiniz.\n\n`;
+           } else {
+               body += `Dijital varlığınızı güçlendirmek ve yeni müşteriler kazanmak için size özel bir strateji geliştirdik.\n\n`;
            }
 
-           body += `Detayları konuşmak isterseniz bu maile dönebilirsiniz.\n\nSaygılarımla,\nAI Sales Agent`;
+           body += `Müsait olduğunuzda detayları konuşmak isterim.\n\nSaygılarımla,\nAI Sales Agent`;
 
            await new Promise(r => setTimeout(r, 1500)); 
            await api.gmail.send(target.email, subject, body, attachments);
@@ -522,9 +534,8 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
            };
            await api.leads.update(updatedLead);
            
-           const logMsg = target.generatedHeroImage ? 'Otopilot: Görsel İkna Maili' : 'Otopilot: Standart Mail';
-           await api.leads.logInteraction(target.id, 'email', logMsg);
-           await api.dashboard.logAction('Mail Gönderildi', `${target.firma_adi} (Görsel: ${!!target.generatedHeroImage})`, 'success');
+           await api.leads.logInteraction(target.id, 'email', 'Otopilot: İlk Tanışma Maili');
+           await api.dashboard.logAction('Mail Gönderildi', `${target.firma_adi}`, 'success');
            addThought('success', `${target.firma_adi} ile ilk temas kuruldu. (Takipte)`);
            return true;
       } catch (e) { 
@@ -606,21 +617,22 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
       const leads = await api.leads.getAll();
       let actionTaken = false;
 
-      // START LOGIC
       addThought('decision', 'Döngü başladı: Satış hunisi ve fırsatlar taranıyor.');
 
-      // 1. Critical: Reply Drafts (Highest Priority)
       actionTaken = await performAutoReplyDrafting(leads);
 
-      // 2. Preparation Phase: Generate Visuals & Social Analysis
-      if (!actionTaken) {
-          actionTaken = await performAutoVisuals(leads);
-      }
+      // Prioritize Social Analysis since we disabled Visuals
       if (!actionTaken) {
           actionTaken = await performAutoSocial(leads);
       }
+      
+      // Disabled Visual Generation
+      /* 
+      if (!actionTaken) {
+          actionTaken = await performAutoVisuals(leads);
+      }
+      */
 
-      // 3. Action Phase: Outreach & Enrichment
       if (!actionTaken) {
           const { targetDistrict, targetSector } = configRef.current;
           
@@ -633,20 +645,10 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
           const readyToContact = activeLeads.filter(l => l.email && !l.son_kontakt_tarihi);
           const needsEnrichment = activeLeads.filter(l => !l.email);
 
-          // Smart Strategy: Prefer Enrich -> Prepare Visuals -> Send Mail
           if (readyToContact.length > 0) {
-              const visualReady = readyToContact.find(l => l.generatedHeroImage);
-              
-              if (visualReady) {
-                  actionTaken = await performAutoOutreach(leads);
-              } else {
-                  if (readyToContact.length > 5) {
-                      addThought('decision', 'Görsel bekleyen çok fazla lead birikti, standart mail gönderimine geçiliyor.');
-                      actionTaken = await performAutoOutreach(leads);
-                  } else {
-                      addThought('wait', 'Lead var ancak henüz görsel hazır değil. Görsel üretimini bekliyorum.');
-                  }
-              }
+              // Now we just check if social analysis is done, or skip straight to outreach
+              // Prioritize those with Instagram profile analysis
+              actionTaken = await performAutoOutreach(leads);
           } 
           
           if (!actionTaken && needsEnrichment.length > 0) {

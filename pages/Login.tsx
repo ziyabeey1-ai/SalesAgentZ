@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bot, Mail, Lock, ArrowRight, Loader2, Database, ShieldCheck, Github, Zap } from 'lucide-react';
@@ -20,7 +19,7 @@ const Login: React.FC = () => {
 
     try {
         if (!firebaseService.isInitialized) {
-            throw new Error("Firebase yapılandırması eksik. Lütfen önce 'Yerel Mod' ile girip Ayarlar'dan yapılandırın.");
+            throw new Error("Firebase yapılandırması bulunamadı. Lütfen 'Yerel Mod' butonunu kullanın veya Ayarlar sayfasından Firebase bilgilerini girin.");
         }
 
         if (mode === 'login') {
@@ -29,15 +28,11 @@ const Login: React.FC = () => {
             await firebaseService.register(email, password);
         }
         
-        // --- SYNC START ---
-        // Fetch profile from Cloud immediately to prevent Onboarding redirect loop on new devices
         try {
             const cloudProfile = await firebaseService.getUserProfile();
             if (cloudProfile && cloudProfile.isSetupComplete) {
                 storage.saveUserProfile(cloudProfile);
-                console.log("Cloud profile synced successfully.");
                 
-                // Sync progress too if possible
                 const cloudProgress = await firebaseService.getUserProgress();
                 if (cloudProgress) {
                     localStorage.setItem('sales_agent_gamification', JSON.stringify(cloudProgress));
@@ -45,11 +40,8 @@ const Login: React.FC = () => {
             }
         } catch (syncError) {
             console.warn("Could not sync profile from cloud:", syncError);
-            // Non-blocking error, maybe it's a fresh user
         }
-        // --- SYNC END ---
 
-        // Success
         localStorage.setItem('isAuthenticated', 'true');
         navigate('/');
     } catch (err: any) {
@@ -67,7 +59,6 @@ const Login: React.FC = () => {
   };
 
   const handleLocalMode = () => {
-      // Bypass auth for local mode
       localStorage.setItem('isAuthenticated', 'true');
       localStorage.setItem('localMode', 'true');
       navigate('/');
@@ -77,9 +68,7 @@ const Login: React.FC = () => {
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl overflow-hidden flex flex-col md:flex-row min-h-[600px]">
         
-        {/* Left Side: Brand & Visuals */}
         <div className="md:w-1/2 bg-gradient-to-br from-slate-900 to-indigo-900 p-12 text-white flex flex-col justify-between relative overflow-hidden">
-            {/* Abstract Shapes */}
             <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500 rounded-full blur-3xl opacity-20 -mr-16 -mt-16 animate-pulse"></div>
             <div className="absolute bottom-0 left-0 w-48 h-48 bg-purple-500 rounded-full blur-3xl opacity-20 -ml-10 -mb-10 animate-pulse delay-700"></div>
 
@@ -113,7 +102,6 @@ const Login: React.FC = () => {
             </div>
         </div>
 
-        {/* Right Side: Login Form */}
         <div className="md:w-1/2 p-12 flex flex-col justify-center bg-white">
             <div className="max-w-md mx-auto w-full">
                 <h2 className="text-2xl font-bold text-slate-900 mb-2">
