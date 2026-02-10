@@ -80,6 +80,23 @@ const parseGeminiJson = (text: string) => {
     }
 };
 
+const extractGeminiText = (result: any) => {
+    if (result?.text) return result.text;
+    const parts = result?.candidates?.[0]?.content?.parts;
+    if (Array.isArray(parts)) {
+        return parts.map((part: { text?: string }) => part.text || '').join('');
+    }
+    return '';
+};
+
+const getAiClient = () => {
+    const apiKey = getApiKey().trim();
+    if (!apiKey) {
+        throw new Error('Gemini API anahtarı eksik. Ayarlar sayfasından ekleyin.');
+    }
+    return new GoogleGenAI({ apiKey });
+};
+
 export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
   const [isAgentRunning, setIsAgentRunning] = useState(false); 
   const [agentStatus, setAgentStatus] = useState<string>('Beklemede');
@@ -221,53 +238,55 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
       setAgentStatus(`${districtToSearch} bölgesinde ${sectorToSearch} taranıyor...`);
       addThought('action', `${districtToSearch} bölgesinde ${sectorToSearch} sektöründe yeni KOBİ taraması başlatıldı.`);
       
-      const ai = new GoogleGenAI({ apiKey: getApiKey() });
-      const prompt = `
-          GÖREV: İstanbul ${districtToSearch} bölgesinde "${sectorToSearch}" sektöründe hizmet veren, web sitesi olmayan veya yenilenmeye ihtiyacı olan 2 adet YEREL işletme bul.
-          
-          KURALLAR:
-          1. Zincir marketleri, hastaneleri, kurumsal büyük firmaları ELE. Sadece esnaf/KOBİ bul.
-          2. Kesinlikle JSON formatında döndür.
-          
-          JSON FORMATI: 
-          [{ "firma_adi": "...", "adres": "..." }]
-      `;
-
-      let textResult = "";
-
       try {
+        const ai = getAiClient();
+        
+        const prompt = `
+            GÖREV: İstanbul ${districtToSearch} bölgesinde "${sectorToSearch}" sektöründe hizmet veren, web sitesi olmayan veya yenilenmeye ihtiyacı olan 2 adet YEREL işletme bul.
+            
+            KURALLAR:
+            1. Zincir marketleri, hastaneleri, kurumsal büyük firmaları ELE. Sadece esnaf/KOBİ bul.
+            2. Kesinlikle JSON formatında döndür.
+            
+            JSON FORMATI: 
+            [{ "firma_adi": "...", "adres": "..." }]
+        `;
+
+        let data: any[] = [];
+        
         // Attempt 1: With Google Search (Preferred)
-        // NOTE: responseMimeType removed to avoid conflict with tools
-        const result = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: prompt,
-            config: { 
-                tools: [{ googleSearch: {} }] 
+        try {
+            const result = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: prompt,
+                config: { 
+                    tools: [{ googleSearch: {} }],
+                    // Note: responseMimeType removed as it conflicts with tools in some versions
+                }
+            });
+            const text = extractGeminiText(result);
+            if (text) data = parseGeminiJson(text);
+        } catch (e: any) {
+            console.warn("Discovery with Search failed, retrying fallback...", e.message);
+            
+            // Attempt 2: Fallback (No Tools, Pure Generation)
+            // Removed responseMimeType: 'application/json' to reduce 400/404 errors on some accounts/models
+            try {
+                const fallbackPrompt = prompt + "\n\nNOT: Google araması şu an meşgul, bu yüzden lütfen bildiğin veya hayali ama gerçekçi örnek yerel işletme verileriyle simülasyon yap. Sadece geçerli JSON dizisi döndür.";
+                const result = await ai.models.generateContent({
+                    model: 'gemini-3-flash-preview',
+                    contents: fallbackPrompt,
+                });
+                const text = extractGeminiText(result);
+                if (text) {
+                    data = parseGeminiJson(text);
+                    addThought('warning', 'Google Arama başarısız oldu, simülasyon verisi kullanılıyor.');
+                }
+            } catch (e2) {
+                console.error("Discovery failed completely", e2);
+                throw e2; // Re-throw to be caught by outer block
             }
-        });
-        textResult = result.text || "";
-      } catch (e: any) {
-          console.warn("Discovery with Search failed, retrying with internal knowledge...", e.message);
-          
-          // Attempt 2: Fallback to internal knowledge (if search fails/404/quota)
-          try {
-              const fallbackPrompt = prompt + "\nNOT: Google araması kullanılamadığı için lütfen bildiğin veya hayali ama gerçekçi örnek yerel işletme verileri oluştur.";
-              const result = await ai.models.generateContent({
-                  model: 'gemini-3-flash-preview',
-                  contents: fallbackPrompt,
-                  config: { responseMimeType: 'application/json' }
-              });
-              textResult = result.text || "";
-              addThought('warning', 'Google Arama başarısız oldu, simülasyon verisi kullanılıyor.');
-          } catch (e2) {
-              console.error("Discovery failed completely", e2);
-              addThought('error', 'Keşif işlemi tamamen başarısız oldu.');
-              return;
-          }
-      }
-
-      try {
-        const data = parseGeminiJson(textResult || '[]');
+        }
 
         if (Array.isArray(data) && data.length > 0) {
             let addedCount = 0;
@@ -303,11 +322,12 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
                 addThought('analysis', 'Bulunan firmalar zaten veritabanında mevcut.');
             }
         } else {
-            addThought('warning', 'Arama yapıldı ancak uygun formatta veri dönmedi.');
+            addThought('warning', 'Model boş veya geçersiz veri döndürdü.');
         }
       } catch (e) { 
-          console.error("JSON Parse error in discovery", e);
-          addThought('error', 'Veri işleme hatası (JSON formatı).');
+          console.error("Auto discovery failed", e);
+          const message = e instanceof Error ? e.message : 'Bilinmeyen Hata';
+          addThought('error', `Keşif işlemi tamamen başarısız oldu: ${message}`);
       }
   };
 
@@ -327,29 +347,29 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
       setAgentStatus(`${target.firma_adi} verileri zenginleştiriliyor...`);
       addThought('action', `${target.firma_adi} için iletişim bilgisi aranıyor.`);
 
-      const ai = new GoogleGenAI({ apiKey: getApiKey() });
-      const prompt = `"${target.firma_adi}" (${target.ilce}, ${target.sektor}) için telefon ve e-posta bul. JSON: { "telefon": "...", "email": "..." }`;
-      
-      let textResult = "";
-      
       try {
-          // Attempt 1: Search
-          const result = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: prompt,
-            config: { 
-                tools: [{ googleSearch: {} }] 
-                // Removed responseMimeType when using tools
-            }
-          });
-          textResult = result.text || "";
-      } catch (e) {
-          // Fallback: Skip this lead's enrichment for now if search fails
-          addThought('warning', `${target.firma_adi} için arama yapılamadı (API Hatası).`);
-          return false; 
-      }
+          const ai = getAiClient();
+          const prompt = `"${target.firma_adi}" (${target.ilce}, ${target.sektor}) için telefon ve e-posta bul. JSON: { "telefon": "...", "email": "..." }`;
           
-      try {
+          let textResult = "";
+          try {
+              const result = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: prompt,
+                config: { 
+                    tools: [{ googleSearch: {} }] 
+                }
+              });
+              textResult = extractGeminiText(result);
+          } catch (searchError) {
+              // Fallback
+              const result = await ai.models.generateContent({
+                  model: 'gemini-3-flash-preview',
+                  contents: prompt + " (Tahmini veya simülasyon veri üret)"
+              });
+              textResult = extractGeminiText(result);
+          }
+          
           const data = parseGeminiJson(textResult || '{}');
           
           if (data.telefon || data.email) {
@@ -366,7 +386,11 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
           } else {
               addThought('analysis', `${target.firma_adi} için web'de yeni bilgi bulunamadı.`);
           }
-      } catch (e) { console.error("Enrichment JSON failed", e); }
+      } catch (e) {
+          console.error("Enrichment failed", e);
+          const message = e instanceof Error ? e.message : 'API hatası';
+          addThought('error', `${target.firma_adi} zenginleştirme hatası: ${message}`);
+      }
       return false;
   };
 
@@ -403,7 +427,7 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
       const candidates = leads.filter(l => 
           l.lead_durumu === 'aktif' &&
           l.email &&
-          l.lead_skoru >= 2 &&
+          l.lead_skoru >= 2 && 
           !l.instagramProfile
       );
 
@@ -506,13 +530,13 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
       addThought('analysis', `${target.firma_adi} firmasından gelen sinyaller analiz ediliyor (Simülasyon).`);
 
       try {
-          const ai = new GoogleGenAI({ apiKey: getApiKey() });
+          const ai = getAiClient();
 
           const simResult = await ai.models.generateContent({
               model: 'gemini-3-flash-preview',
               contents: `ROL: ${target.firma_adi} sahibi. DURUM: Mail aldın. GÖREV: 'Fiyat nedir?' veya 'Örnek var mı?' gibi kısa bir cevap yaz.`
           });
-          const incomingMessage = simResult.text || "Fiyat nedir?";
+          const incomingMessage = extractGeminiText(simResult) || "Fiyat nedir?";
 
           const draftPrompt = `
             GÖREV: Müşteri yanıtını analiz et ve cevap taslağı oluştur.
@@ -526,7 +550,7 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
               config: { responseMimeType: 'application/json' }
           });
 
-          const data = parseGeminiJson(result.text || '{}');
+          const data = parseGeminiJson(extractGeminiText(result) || '{}');
 
           const updatedLead: Lead = {
               ...target,
@@ -546,7 +570,11 @@ export const AgentProvider = ({ children }: { children?: React.ReactNode }) => {
           setPendingDraftsCount(prev => prev + 1);
           return true;
 
-      } catch (e) { console.error("Reply drafting failed", e); }
+      } catch (e) {
+          console.error("Reply drafting failed", e);
+          const message = e instanceof Error ? e.message : 'API veya JSON hatası';
+          addThought('error', `Yanıt taslağı üretilemedi: ${message}`);
+      }
       return false;
   };
 
