@@ -29,8 +29,8 @@ interface AgentContextType {
 const AgentContext = createContext<AgentContextType | undefined>(undefined);
 
 const AGENT_MODEL = 'gemini-3-flash-preview';
-const BURST_INTERVAL = 5000;
-const IDLE_INTERVAL = 60000;
+const BURST_INTERVAL = 3000; // Faster burst
+const IDLE_INTERVAL = 15000; // Reduced idle time to 15s
 const MIN_ACTIVE_LEADS = 8;
 const MIN_ENRICHMENT_SCORE = 3;
 const AGENT_RUNNING_KEY = 'agentRunning';
@@ -509,7 +509,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 }
                 loopTimeoutRef.current = setTimeout(agentLoop, BURST_INTERVAL);
             } else {
-                setAgentStatus(isBusinessHours() ? 'Beklemede (İzleniyor)' : 'Mesai Dışı (Uyku Modu)');
+                setAgentStatus(isBusinessHours() ? 'Taranıyor... (İşlem Yok)' : 'Mesai Dışı (Uyku Modu)');
                 burstStreakRef.current = 0;
                 loopTimeoutRef.current = setTimeout(agentLoop, IDLE_INTERVAL);
             }

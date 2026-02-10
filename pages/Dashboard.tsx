@@ -28,7 +28,10 @@ import {
   Search,
   Sparkles,
   Zap,
-  TrendingDown
+  TrendingDown,
+  Clock,
+  CheckCircle,
+  AlertCircle
 } from 'lucide-react';
 import { 
   BarChart as ReBarChart, 
@@ -40,14 +43,15 @@ import {
   ResponsiveContainer, 
 } from 'recharts';
 import { api } from '../services/api';
-import { learningService } from '../services/learningService'; // NEW IMPORT
-import { DashboardStats, ActionLog, Lead, MarketStrategyResult } from '../types';
+import { learningService } from '../services/learningService';
+import { DashboardStats, ActionLog, Lead, MarketStrategyResult, Interaction } from '../types';
 import EmptyState from '../components/EmptyState';
 import { useAgent } from '../context/AgentContext';
 
 const Dashboard: React.FC = () => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [recentInteractions, setRecentInteractions] = useState<Interaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [sendingReport, setSendingReport] = useState(false);
   const [chartData, setChartData] = useState<any[]>([]);
@@ -113,13 +117,15 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     const fetchDashboardData = async () => {
         try {
-            const [statsData, leadsData, reportData] = await Promise.all([
+            const [statsData, leadsData, reportData, interactionsData] = await Promise.all([
                 api.dashboard.getStats(),
                 api.leads.getAll(),
-                api.reports.getPerformanceData()
+                api.reports.getPerformanceData(),
+                api.interactions.getRecent(10)
             ]);
             setStats(statsData);
             setLeads(leadsData);
+            setRecentInteractions(interactionsData);
             
             const mappedChartData = reportData.weeklyTrend.map((item: any) => ({
                 name: item.name,
@@ -204,6 +210,12 @@ const Dashboard: React.FC = () => {
       }
   };
 
+  // Helper to find lead name by id
+  const getLeadName = (id: string) => {
+      const l = leads.find(lead => lead.id === id);
+      return l ? l.firma_adi : 'Bilinmeyen Firma';
+  };
+
   if (loading) {
       return (
           <div className="flex items-center justify-center h-full min-h-[500px]">
@@ -215,7 +227,7 @@ const Dashboard: React.FC = () => {
   if (!stats) return null;
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-6 animate-fade-in pb-12">
       <div className="flex justify-end mb-4 gap-3">
           <button 
             onClick={handlePlayBriefing}
@@ -563,6 +575,65 @@ const Dashboard: React.FC = () => {
               </table>
           </div>
         </div>
+      </div>
+
+      {/* NEW SECTION: Recent Emails Log */}
+      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-slate-800 flex items-center gap-2">
+                  <Mail size={18} className="text-purple-600"/> Son Gönderilen İletiler
+              </h3>
+              <span className="text-xs text-slate-500">Son 10 İşlem</span>
+          </div>
+          <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                  <thead className="bg-slate-50 text-slate-500 font-medium">
+                      <tr>
+                          <th className="px-4 py-3 rounded-l-lg">Saat</th>
+                          <th className="px-4 py-3">Firma (Lead)</th>
+                          <th className="px-4 py-3">Konu / İçerik</th>
+                          <th className="px-4 py-3 rounded-r-lg">Durum</th>
+                      </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                      {recentInteractions.filter(i => i.type === 'email').length > 0 ? (
+                          recentInteractions.filter(i => i.type === 'email').map((interaction) => (
+                              <tr key={interaction.id} className="hover:bg-slate-50/50 transition-colors">
+                                  <td className="px-4 py-3 text-slate-500 text-xs font-mono">
+                                      <div className="flex items-center gap-1">
+                                          <Clock size={12} /> {interaction.time}
+                                          <span className="text-[10px] text-slate-400 ml-1">{new Date(interaction.date).toLocaleDateString('tr-TR', {day: 'numeric', month: 'short'})}</span>
+                                      </div>
+                                  </td>
+                                  <td className="px-4 py-3 font-medium text-slate-800">
+                                      {getLeadName(interaction.leadId)}
+                                  </td>
+                                  <td className="px-4 py-3 text-slate-600 truncate max-w-[300px]" title={interaction.summary}>
+                                      {interaction.summary}
+                                  </td>
+                                  <td className="px-4 py-3">
+                                      <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase flex items-center gap-1 w-fit ${
+                                          interaction.status === 'sent' || interaction.status === 'delivered' ? 'bg-green-100 text-green-700' :
+                                          interaction.status === 'read' ? 'bg-blue-100 text-blue-700' :
+                                          'bg-slate-100 text-slate-600'
+                                      }`}>
+                                          {interaction.status === 'sent' && <CheckCircle size={10} />}
+                                          {interaction.status === 'failed' && <AlertCircle size={10} />}
+                                          {interaction.status === 'sent' ? 'Gönderildi' : interaction.status}
+                                      </span>
+                                  </td>
+                              </tr>
+                          ))
+                      ) : (
+                          <tr>
+                              <td colSpan={4} className="px-4 py-8 text-center text-slate-400 italic">
+                                  Henüz mail gönderimi yapılmadı.
+                              </td>
+                          </tr>
+                      )}
+                  </tbody>
+              </table>
+          </div>
       </div>
     </div>
   );

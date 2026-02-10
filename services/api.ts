@@ -154,7 +154,20 @@ export const api = {
         }
     }
   },
-  // ... (rest of the file remains similar but ensure parseGeminiJson is used consistently)
+  // NEW: Interactions Module
+  interactions: {
+      getRecent: async (limit: number = 10): Promise<Interaction[]> => {
+          const all = useSheets() ? await sheetsService.getInteractions() : storage.getInteractions();
+          // Sort by date and time desc
+          return all
+            .sort((a, b) => {
+                const dateA = new Date(`${a.date}T${a.time}`);
+                const dateB = new Date(`${b.date}T${b.time}`);
+                return dateB.getTime() - dateA.getTime();
+            })
+            .slice(0, limit);
+      }
+  },
   gmail: {
       send: async (to: string, subject: string, body: string, attachments?: any[]) => {
           gamificationService.recordAction('email_sent');
