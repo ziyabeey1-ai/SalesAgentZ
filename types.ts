@@ -1,5 +1,4 @@
 
-
 export type LeadStatus = 
   | 'aktif' 
   | 'beklemede' 
@@ -31,6 +30,102 @@ export interface InstagramAnalysis {
     lastAnalyzed: string;
 }
 
+// NEW: Persona Types (DISC Model Simplified)
+export type PersonaType = 'Dominant' | 'Analitik' | 'Sosyal' | 'Guven_Odakli' | 'Bilinmiyor';
+
+export interface PersonaAnalysis {
+    type: PersonaType;
+    traits: string[]; // e.g. ["Hızlı sonuç ister", "Veri odaklı", "Risk almaz"]
+    communicationStyle: string; // e.g. "Kısa, net ve sonuç odaklı yaz."
+    reasoning: string;
+}
+
+// NEW: Strategy Prediction Types
+export interface ResponseDrafts {
+    aggressive: string;
+    neutral: string;
+    consultative: string;
+}
+
+export interface PredictedQuestion {
+    question: string;
+    category: 'pricing' | 'timeline' | 'social_proof' | 'technical' | 'contract' | 'other';
+    responses: ResponseDrafts;
+}
+
+export interface StrategyResult {
+    possibleQuestions: PredictedQuestion[];
+    recommendedTone: 'aggressive' | 'neutral' | 'consultative';
+    reasoning: string;
+}
+
+// NEW: Market Analysis Types (War Room)
+export interface MarketAnalysis {
+    sectorDigitalMaturity: number; // 1-10
+    regionEconomicActivity: number; // 1-10
+    seasonalFactor: string;
+    overallOpportunity: 'Yüksek' | 'Orta' | 'Düşük';
+}
+
+export interface IdealLeadProfile {
+    companyAge: string;
+    employeeCount: string;
+    estimatedRevenue: string;
+    digitalMaturity: number;
+    hasWebsite: boolean;
+    reasoning: string;
+}
+
+export interface StrategyPriority {
+    name: string;
+    priority: number;
+    score: number;
+    reasoning: string;
+    searchTerms: string[];
+}
+
+export interface RegionRotation {
+    district: string;
+    priority: number;
+    reasoning: string;
+}
+
+export interface ActionPlan {
+    nextCycle: string;
+    expectedLeadQuality: string;
+    estimatedConversion: string;
+}
+
+export interface MarketStrategyResult {
+    marketAnalysis: MarketAnalysis;
+    idealLeadProfile: IdealLeadProfile;
+    strategyPriority: StrategyPriority[];
+    regionRotation: RegionRotation[];
+    actionPlan: ActionPlan;
+    lastUpdated?: string;
+}
+
+// NEW: Lead Scoring Types
+export interface LeadScoreDetails {
+    categoryScores: {
+        website: number;
+        seo: number;
+        socialMedia: number;
+        onlineSystem: number;
+        contentQuality: number;
+        competitorGap: number;
+        sectorUrgency: number;
+    };
+    bonusFactors: Record<string, number>;
+    totalScore: number;
+    finalLeadScore: number; // 1-5
+    digitalWeaknesses: string[];
+    opportunityAreas: string[];
+    estimatedConversionProbability: string;
+    reasoning: string;
+    lastCalculated: string;
+}
+
 export interface Lead {
   id: string;
   firma_adi: string;
@@ -59,6 +154,12 @@ export interface Lead {
   competitorAnalysis?: CompetitorAnalysis;
   instagramProfile?: InstagramAnalysis; // New Field
   generatedHeroImage?: string; // New Field (Base64)
+  scoreDetails?: LeadScoreDetails; // NEW FIELD
+  
+  // NEW FIELDS FOR ADVANCED OUTREACH
+  digitalWeakness?: string; // e.g. "Mobil Uyumsuzluk", "Site Yok", "Kırık Linkler"
+  targetAudience?: string; // e.g. "Lüks Konut Alıcıları", "Üniversite Öğrencileri"
+  personaAnalysis?: PersonaAnalysis; // NEW FIELD: Nöro-Pazarlama
 }
 
 export interface Task {

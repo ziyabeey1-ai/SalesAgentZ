@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useRef } from 'react';
 import { 
   Building2, 
@@ -20,10 +21,17 @@ import {
   Terminal,
   Activity,
   PauseCircle,
-  PlayCircle
+  PlayCircle,
+  Target,
+  BarChart,
+  Users,
+  Search,
+  Sparkles,
+  Zap,
+  TrendingDown
 } from 'lucide-react';
 import { 
-  BarChart, 
+  BarChart as ReBarChart, 
   Bar, 
   XAxis, 
   YAxis, 
@@ -32,7 +40,8 @@ import {
   ResponsiveContainer, 
 } from 'recharts';
 import { api } from '../services/api';
-import { DashboardStats, ActionLog, Lead } from '../types';
+import { learningService } from '../services/learningService'; // NEW IMPORT
+import { DashboardStats, ActionLog, Lead, MarketStrategyResult } from '../types';
 import EmptyState from '../components/EmptyState';
 import { useAgent } from '../context/AgentContext';
 
@@ -43,14 +52,18 @@ const Dashboard: React.FC = () => {
   const [sendingReport, setSendingReport] = useState(false);
   const [chartData, setChartData] = useState<any[]>([]);
   
-  const { thoughts, isAgentRunning, toggleAgent } = useAgent();
+  const { thoughts, isAgentRunning, toggleAgent, agentConfig } = useAgent();
   const thoughtsEndRef = useRef<HTMLDivElement>(null);
   
   const [briefingStatus, setBriefingStatus] = useState<'idle' | 'loading' | 'playing'>('idle');
 
-  const [insights, setInsights] = useState<any[]>([]);
-  const [loadingInsights, setLoadingInsights] = useState(false);
+  // Strategy State
+  const [strategyResult, setStrategyResult] = useState<MarketStrategyResult | null>(null);
+  const [loadingStrategy, setLoadingStrategy] = useState(false);
   const [isGeminiConfigured, setIsGeminiConfigured] = useState(false);
+  
+  // Learning Insights State
+  const [aiInsights, setAiInsights] = useState<any[]>([]);
 
   useEffect(() => {
     const syncGeminiConfig = () => {
@@ -80,9 +93,11 @@ const Dashboard: React.FC = () => {
                 response: item.response
             }));
             setChartData(mappedChartData);
+            setAiInsights(learningService.getInsights()); // Fetch insights
             
-            if (leadsData.length > 5) {
-                loadInsights();
+            // Initial strategy load if we have data
+            if (leadsData.length > 0) {
+                loadStrategy();
             }
         } catch (e) {
             console.error("Dashboard data load error", e);
@@ -99,15 +114,16 @@ const Dashboard: React.FC = () => {
       }
   }, [thoughts]);
 
-  const loadInsights = async () => {
-      setLoadingInsights(true);
+  const loadStrategy = async () => {
+      setLoadingStrategy(true);
       try {
-          const data = await api.strategy.getInsights();
-          setInsights(data);
+          // Use Agent Config for target
+          const result = await api.strategy.analyzeMarket(agentConfig.targetSector, agentConfig.targetDistrict);
+          setStrategyResult(result);
       } catch (e) {
           console.error(e);
       } finally {
-          setLoadingInsights(false);
+          setLoadingStrategy(false);
       }
   };
 
@@ -253,101 +269,202 @@ const Dashboard: React.FC = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        <div className="lg:col-span-2 bg-slate-900 rounded-2xl shadow-xl overflow-hidden flex flex-col border border-slate-800 h-[400px]">
-            <div className="p-4 border-b border-slate-800 bg-slate-950 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${isAgentRunning ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-                    <h3 className="text-sm font-bold text-slate-100 font-mono flex items-center gap-2">
-                        <Terminal size={14} className="text-indigo-400" />
-                        CANLI OTOPİLOT TERMİNALİ
-                    </h3>
+        {/* Left Column: Terminal & Insights */}
+        <div className="lg:col-span-2 space-y-6">
+            
+            {/* Live Terminal */}
+            <div className="bg-slate-900 rounded-2xl shadow-xl overflow-hidden flex flex-col border border-slate-800 h-[350px]">
+                <div className="p-4 border-b border-slate-800 bg-slate-950 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                        <div className={`w-3 h-3 rounded-full ${isAgentRunning ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
+                        <h3 className="text-sm font-bold text-slate-100 font-mono flex items-center gap-2">
+                            <Terminal size={14} className="text-indigo-400" />
+                            CANLI OTOPİLOT TERMİNALİ
+                        </h3>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <span className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">
+                            GEMINI-3-FLASH // {isGeminiConfigured ? 'READY' : 'OFFLINE'}
+                        </span>
+                        <button 
+                            onClick={toggleAgent}
+                            className={`p-1.5 rounded-full ${isAgentRunning ? 'text-red-400 hover:bg-red-900/20' : 'text-green-400 hover:bg-green-900/20'} transition-colors`}
+                            title={isAgentRunning ? "Durdur" : "Başlat"}
+                        >
+                            {isAgentRunning ? <PauseCircle size={16} /> : <PlayCircle size={16} />}
+                        </button>
+                    </div>
                 </div>
-                <div className="flex items-center gap-3">
-                    <span className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">
-                        GEMINI-3-FLASH-PREVIEW // {isGeminiConfigured ? 'CONFIGURED' : 'API KEY MISSING'}
-                    </span>
-                    <button 
-                        onClick={toggleAgent}
-                        className={`p-1.5 rounded-full ${isAgentRunning ? 'text-red-400 hover:bg-red-900/20' : 'text-green-400 hover:bg-green-900/20'} transition-colors`}
-                        title={isAgentRunning ? "Durdur" : "Başlat"}
-                    >
-                        {isAgentRunning ? <PauseCircle size={16} /> : <PlayCircle size={16} />}
-                    </button>
+                
+                <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-3 bg-slate-900/50 relative">
+                    <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5 pointer-events-none"></div>
+                    
+                    {thoughts.length === 0 ? (
+                        <div className="text-slate-600 italic text-center mt-20">
+                            Sistem hazır. Başlatmak için play butonuna basın.
+                        </div>
+                    ) : (
+                        thoughts.slice().reverse().map((thought) => (
+                            <div key={thought.id} className="flex gap-3 animate-slide-in-right group">
+                                <span className="text-slate-500 flex-shrink-0 w-16">{thought.timestamp}</span>
+                                <div className="flex-1 flex gap-2">
+                                    <span className={`font-bold flex-shrink-0 uppercase w-20 ${
+                                        thought.type === 'decision' ? 'text-purple-400' :
+                                        thought.type === 'action' ? 'text-indigo-400' :
+                                        thought.type === 'success' ? 'text-green-400' :
+                                        thought.type === 'error' ? 'text-red-400' :
+                                        thought.type === 'wait' ? 'text-amber-400' :
+                                        thought.type === 'warning' ? 'text-orange-400' :
+                                        'text-blue-400'
+                                    }`}>
+                                        [{thought.type}]
+                                    </span>
+                                    <span className="text-slate-300 group-hover:text-white transition-colors">
+                                        {thought.message}
+                                    </span>
+                                </div>
+                            </div>
+                        ))
+                    )}
+                    <div ref={thoughtsEndRef} />
                 </div>
             </div>
-            
-            <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-3 bg-slate-900/50 relative">
-                <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5 pointer-events-none"></div>
+
+            {/* AI Learning Insights */}
+            <div className="bg-gradient-to-r from-purple-900 to-indigo-900 rounded-xl border border-indigo-800 p-6 text-white relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-white opacity-5 rounded-full -mr-10 -mt-10"></div>
+                <div className="flex items-center justify-between mb-4 relative z-10">
+                    <h3 className="font-bold text-lg flex items-center gap-2">
+                        <Sparkles size={18} className="text-yellow-300" /> Yapay Zeka Öğrenimi
+                    </h3>
+                    <span className="text-[10px] bg-white/10 px-2 py-1 rounded border border-white/10">Otomatik Optimizasyon</span>
+                </div>
                 
-                {thoughts.length === 0 ? (
-                    <div className="text-slate-600 italic text-center mt-20">
-                        Sistem hazır. Başlatmak için play butonuna basın.
+                {aiInsights.length > 0 ? (
+                    <div className="space-y-3 relative z-10">
+                        {aiInsights.slice(0, 3).map((insight, idx) => (
+                            <div key={idx} className="flex items-center gap-3 bg-white/5 p-3 rounded-lg border border-white/5 hover:bg-white/10 transition-colors">
+                                <div className={`p-2 rounded-full ${insight.type === 'positive' ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
+                                    {insight.type === 'positive' ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                                </div>
+                                <div className="flex-1">
+                                    <p className="text-sm font-medium text-white/90">{insight.message}</p>
+                                    <p className="text-[10px] text-white/60">{new Date(insight.timestamp).toLocaleTimeString()} • Etki: {insight.impact}</p>
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 ) : (
-                    thoughts.slice().reverse().map((thought) => (
-                        <div key={thought.id} className="flex gap-3 animate-slide-in-right group">
-                            <span className="text-slate-500 flex-shrink-0 w-16">{thought.timestamp}</span>
-                            <div className="flex-1 flex gap-2">
-                                <span className={`font-bold flex-shrink-0 uppercase w-20 ${
-                                    thought.type === 'decision' ? 'text-purple-400' :
-                                    thought.type === 'action' ? 'text-indigo-400' :
-                                    thought.type === 'success' ? 'text-green-400' :
-                                    thought.type === 'error' ? 'text-red-400' :
-                                    thought.type === 'wait' ? 'text-amber-400' :
-                                    thought.type === 'warning' ? 'text-orange-400' :
-                                    'text-blue-400'
-                                }`}>
-                                    [{thought.type}]
-                                </span>
-                                <span className="text-slate-300 group-hover:text-white transition-colors">
-                                    {thought.message}
-                                </span>
-                            </div>
-                        </div>
-                    ))
+                    <div className="text-center py-6 text-indigo-200 text-sm relative z-10">
+                        <BrainCircuit size={32} className="mx-auto mb-2 opacity-50" />
+                        <p>Henüz yeterli veri yok. Satış yaptıkça yapay zeka stratejiyi güncelleyecek.</p>
+                    </div>
                 )}
-                <div ref={thoughtsEndRef} />
             </div>
         </div>
 
-        <div className="relative rounded-2xl shadow-xl p-6 text-white overflow-hidden group h-[400px] flex flex-col bg-gradient-to-br from-indigo-900 to-purple-900">
-            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10"></div>
-            <div className="absolute -top-24 -right-24 w-64 h-64 bg-white rounded-full blur-[100px] opacity-10"></div>
-
-            <div className="flex justify-between items-center mb-6 relative z-10">
-                <h3 className="text-lg font-bold flex items-center gap-2">
-                    <BrainCircuit className="text-indigo-300" size={20} />
-                    Strateji Odası
+        {/* Right Column: Strategy War Room */}
+        <div className="relative rounded-2xl shadow-xl overflow-hidden group h-full flex flex-col bg-slate-900 border border-slate-800">
+            {/* Header */}
+            <div className="p-4 bg-gradient-to-r from-indigo-900 to-slate-900 border-b border-indigo-500/30 flex justify-between items-center relative z-10">
+                <h3 className="text-base font-bold flex items-center gap-2 text-white">
+                    <BrainCircuit className="text-indigo-400" size={20} />
+                    Savaş Odası
                 </h3>
-                <button 
-                  onClick={loadInsights} 
-                  disabled={loadingInsights}
-                  className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-all"
-                >
-                    {loadingInsights ? <Loader2 size={16} className="animate-spin"/> : <RefreshCw size={16} />}
-                </button>
+                <div className="flex items-center gap-2">
+                    <span className="text-[10px] bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded border border-indigo-500/30">
+                        {agentConfig.targetDistrict} / {agentConfig.targetSector}
+                    </span>
+                    <button 
+                      onClick={loadStrategy} 
+                      disabled={loadingStrategy}
+                      className="p-1.5 bg-white/10 hover:bg-white/20 rounded-lg transition-all text-white"
+                    >
+                        {loadingStrategy ? <Loader2 size={14} className="animate-spin"/> : <RefreshCw size={14} />}
+                    </button>
+                </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto space-y-4 relative z-10 custom-scrollbar pr-2">
-                {insights.length > 0 ? (
-                    insights.map((insight, idx) => (
-                        <div key={idx} className="bg-black/20 backdrop-blur-md rounded-xl p-4 border border-white/5 hover:bg-black/30 transition-colors">
-                            <div className="flex justify-between items-start mb-2">
-                                <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded border ${
-                                    insight.type === 'opportunity' ? 'bg-emerald-500/20 text-emerald-200 border-emerald-500/30' :
-                                    'bg-blue-500/20 text-blue-200 border-blue-500/30'
-                                }`}>
-                                    {insight.type === 'opportunity' ? 'Fırsat' : 'İpucu'}
-                                </span>
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 relative z-10 custom-scrollbar">
+                {strategyResult ? (
+                    <>
+                        {/* Market Scores */}
+                        <div className="grid grid-cols-2 gap-3">
+                            <div className="bg-slate-800/50 p-3 rounded-xl border border-slate-700">
+                                <div className="text-xs text-slate-400 mb-1">Dijital Olgunluk</div>
+                                <div className="text-xl font-bold text-indigo-400">{strategyResult.marketAnalysis.sectorDigitalMaturity}/10</div>
+                                <div className="w-full bg-slate-700 h-1 mt-2 rounded-full overflow-hidden">
+                                    <div className="bg-indigo-500 h-full" style={{width: `${strategyResult.marketAnalysis.sectorDigitalMaturity * 10}%`}}></div>
+                                </div>
                             </div>
-                            <h4 className="font-bold text-sm mb-1">{insight.title}</h4>
-                            <p className="text-xs text-indigo-100 opacity-80 leading-relaxed">{insight.description}</p>
+                            <div className="bg-slate-800/50 p-3 rounded-xl border border-slate-700">
+                                <div className="text-xs text-slate-400 mb-1">Ekon. Aktivite</div>
+                                <div className="text-xl font-bold text-green-400">{strategyResult.marketAnalysis.regionEconomicActivity}/10</div>
+                                <div className="w-full bg-slate-700 h-1 mt-2 rounded-full overflow-hidden">
+                                    <div className="bg-green-500 h-full" style={{width: `${strategyResult.marketAnalysis.regionEconomicActivity * 10}%`}}></div>
+                                </div>
+                            </div>
                         </div>
-                    ))
+
+                        {/* Top Strategy */}
+                        {strategyResult.strategyPriority[0] && (
+                            <div className="bg-gradient-to-br from-indigo-600/20 to-purple-600/20 p-4 rounded-xl border border-indigo-500/30">
+                                <div className="flex justify-between items-start mb-2">
+                                    <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                                        <Target size={14} className="text-indigo-400"/>
+                                        {strategyResult.strategyPriority[0].name}
+                                    </h4>
+                                    <span className="text-[10px] bg-indigo-500 text-white px-1.5 py-0.5 rounded font-bold">#{strategyResult.strategyPriority[0].priority}</span>
+                                </div>
+                                <p className="text-xs text-indigo-200 mb-3 leading-relaxed">
+                                    {strategyResult.strategyPriority[0].reasoning}
+                                </p>
+                                <div className="flex flex-wrap gap-1">
+                                    {strategyResult.strategyPriority[0].searchTerms.map((term, idx) => (
+                                        <span key={idx} className="text-[9px] bg-black/30 text-slate-300 px-2 py-1 rounded border border-white/10 flex items-center gap-1">
+                                            <Search size={8}/> {term}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* ICP Card */}
+                        <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700">
+                            <h4 className="text-xs font-bold text-slate-300 uppercase mb-3 flex items-center gap-2">
+                                <Users size={12} className="text-orange-400"/> İdeal Müşteri Profili (ICP)
+                            </h4>
+                            <div className="grid grid-cols-2 gap-y-2 text-xs">
+                                <div className="text-slate-500">Yaş: <span className="text-slate-300">{strategyResult.idealLeadProfile.companyAge}</span></div>
+                                <div className="text-slate-500">Çalışan: <span className="text-slate-300">{strategyResult.idealLeadProfile.employeeCount}</span></div>
+                                <div className="text-slate-500">Ciro: <span className="text-slate-300">{strategyResult.idealLeadProfile.estimatedRevenue}</span></div>
+                                <div className="text-slate-500">Site: <span className={`font-bold ${strategyResult.idealLeadProfile.hasWebsite ? 'text-green-400' : 'text-red-400'}`}>{strategyResult.idealLeadProfile.hasWebsite ? 'Var' : 'Yok'}</span></div>
+                            </div>
+                        </div>
+
+                        {/* Next Move */}
+                        <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 flex justify-between items-center">
+                            <div>
+                                <div className="text-[10px] text-slate-500 uppercase font-bold">Tahmini Dönüşüm</div>
+                                <div className="text-sm font-bold text-emerald-400">{strategyResult.actionPlan.estimatedConversion}</div>
+                            </div>
+                            <div className="text-right">
+                                <div className="text-[10px] text-slate-500 uppercase font-bold">Kalite Beklentisi</div>
+                                <div className="text-sm font-bold text-indigo-400">{strategyResult.actionPlan.expectedLeadQuality}</div>
+                            </div>
+                        </div>
+                    </>
                 ) : (
-                    <div className="text-center py-10 text-indigo-200 text-sm">
-                        <Lightbulb size={24} className="mx-auto mb-2 opacity-50" />
-                        <p>Yeterli veri toplanıyor...</p>
+                    <div className="flex flex-col items-center justify-center h-full text-center p-6">
+                        <Activity size={32} className="text-slate-700 mb-3" />
+                        <p className="text-sm text-slate-500 mb-4">Henüz stratejik analiz yapılmadı.</p>
+                        <button 
+                            onClick={loadStrategy}
+                            className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition-colors"
+                        >
+                            Analizi Başlat
+                        </button>
                     </div>
                 )}
             </div>
@@ -362,7 +479,7 @@ const Dashboard: React.FC = () => {
           </div>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData}>
+              <ReBarChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} dy={10} />
                 <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} />
@@ -372,7 +489,7 @@ const Dashboard: React.FC = () => {
                 />
                 <Bar dataKey="sent" fill="#6366f1" radius={[4, 4, 0, 0]} name="Mail Gönderildi" barSize={32} />
                 <Bar dataKey="response" fill="#10b981" radius={[4, 4, 0, 0]} name="Yanıt Alındı" barSize={32} />
-              </BarChart>
+              </ReBarChart>
             </ResponsiveContainer>
           </div>
         </div>
