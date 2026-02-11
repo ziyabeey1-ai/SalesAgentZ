@@ -1,5 +1,60 @@
 
 export class GmailService {
+    private static readonly EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+    private static readonly KNOWN_INVALID_DOMAINS = new Set(['example.com', 'email.com', 'test.com', 'localhost', 'localdomain']);
+
+    private extractDomain(email: string): string | null {
+        const normalized = (email || '').trim().toLowerCase();
+        const atIndex = normalized.lastIndexOf('@');
+        if (atIndex === -1 || atIndex === normalized.length - 1) return null;
+        return normalized.slice(atIndex + 1).trim() || null;
+    }
+
+    private hasValidDomainFormat(domain: string): boolean {
+        if (!domain || domain.includes(' ') || !domain.includes('.')) return false;
+        if (GmailService.KNOWN_INVALID_DOMAINS.has(domain)) return false;
+        return /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(domain);
+    }
+
+    private async fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            return await fetch(url, { signal: controller.signal, headers: { Accept: 'application/json' } });
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    private async validateRecipientBeforeSend(recipientEmail: string): Promise<void> {
+        const normalizedEmail = (recipientEmail || '').trim().toLowerCase();
+        if (!GmailService.EMAIL_REGEX.test(normalizedEmail)) {
+            throw new Error(`ALICI_EMAIL_GECERSIZ:${recipientEmail}`);
+        }
+
+        const domain = this.extractDomain(normalizedEmail);
+        if (!domain || !this.hasValidDomainFormat(domain)) {
+            throw new Error(`ALICI_DOMAIN_FORMAT_GECERSIZ:${recipientEmail}`);
+        }
+
+        // DNS doğrulaması: kesin olarak yoksa (NXDOMAIN) gönderimi engelle.
+        // Ağ/CORS sorunlarında fail-open davranıp kullanıcıyı gereksiz bloklamayalım.
+        try {
+            const dnsUrl = `https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=MX`;
+            const res = await this.fetchWithTimeout(dnsUrl, 4000);
+            if (!res.ok) return;
+
+            const data = await res.json();
+            if (data?.Status === 3) {
+                throw new Error(`ALICI_DOMAIN_DNS_HATASI:${domain}`);
+            }
+        } catch (error) {
+            if (error instanceof Error && error.message.startsWith('ALICI_DOMAIN_DNS_HATASI:')) {
+                throw error;
+            }
+            console.warn(`[EMAIL VALIDATION] DNS doğrulaması yapılamadı, gönderime devam ediliyor: ${domain}`);
+        }
+    }
     
     /**
      * Constructs a MIME message with optional attachments.
@@ -60,6 +115,8 @@ export class GmailService {
         if (!window.gapi?.client?.gmail) {
             throw new Error('Gmail API hazır değil. Lütfen Ayarlar > Google entegrasyonunda tekrar oturum açın.');
         }
+
+        await this.validateRecipientBeforeSend(to);
 
         const raw = this.createMimeMessage(to, subject, body, attachments);
 
