@@ -223,6 +223,12 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return 'Bilinmeyen hata';
     };
 
+    const isSystemMailbox = (email?: string): boolean => {
+        const normalized = (email || '').trim().toLowerCase();
+        if (!normalized) return false;
+        return ['mailer-daemon', 'postmaster', 'noreply', 'no-reply', 'do-not-reply'].some(token => normalized.includes(token));
+    };
+
     const isFollowupDue = (lead: Lead): boolean => {
         if (!lead.son_kontakt_tarihi) return true;
         const lastContact = new Date(lead.son_kontakt_tarihi);
@@ -269,7 +275,8 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const targets = leads.filter(l => 
             (l.lead_durumu === 'takipte' || l.lead_durumu === 'teklif_gonderildi') &&
             !l.draftResponse && 
-            isFollowupDue(l)
+            isFollowupDue(l) &&
+            !isSystemMailbox(l.email)
         );
         
         if (targets.length === 0) return false;
@@ -505,7 +512,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const performOutreach = async (leads: Lead[]) => {
         const now = Date.now();
         const pendingQueue = leads
-            .filter(l => isProspectLead(l) && l.email && !l.son_kontakt_tarihi)
+            .filter(l => isProspectLead(l) && l.email && !l.son_kontakt_tarihi && !isSystemMailbox(l.email))
             .filter((lead) => {
                 const retryState = outreachRetryRef.current[lead.id];
                 return !retryState || retryState.nextRetryAt <= now;

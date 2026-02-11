@@ -226,9 +226,14 @@ const MailAutomation: React.FC = () => {
       setAnalyzingPersonaId(item.id);
       try {
           const persona = await api.strategy.analyzePersona(item.lead);
+          
+          // Update Lead locally and remotely
           const updatedLead = { ...item.lead, personaAnalysis: persona };
           await api.leads.update(updatedLead);
+          
+          // Update queue
           setQueue(prev => prev.map(q => q.id === item.id ? { ...q, lead: updatedLead } : q));
+          
           await api.dashboard.logAction('Persona Analizi', `${item.lead.firma_adi}: ${persona.type}`, 'success');
       } catch (error) {
           console.error(error);
@@ -239,10 +244,14 @@ const MailAutomation: React.FC = () => {
   };
 
   const handleSmartWrite = async (item: QueueItem) => {
+      // Ensure we use the latest lead data from queue which might have persona
       const currentItem = queue.find(q => q.id === item.id) || item;
+      
       setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'sending' } : q));
+      
       try {
           const generated = await api.templates.generateColdEmail(currentItem.lead);
+          
           setQueue(prev => prev.map(q => q.id === item.id ? { 
               ...q, 
               status: 'pending', 
@@ -265,6 +274,7 @@ const MailAutomation: React.FC = () => {
           setDraftSubject(generated.subject);
           setDraftBody(generated.body + `\n\n${generated.cta}`);
           setActiveTab('approval');
+
       } catch (error) {
           console.error("Smart write failed", error);
           setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error' } : q));

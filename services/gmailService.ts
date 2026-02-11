@@ -134,70 +134,77 @@ export class GmailService {
         }
     }
 
-    public async listUnreadInbox(limit: number = 10): Promise<any[]> {
+    private parseFromHeader(fromHeader: string): { fromEmail: string; fromName: string } {
+        const raw = (fromHeader || '').trim();
+        const angleMatch = raw.match(/^(.*)<([^>]+)>$/);
+
+        if (angleMatch) {
+            const fromName = angleMatch[1].replace(/(^"|"$)/g, '').trim();
+            const fromEmail = (angleMatch[2] || '').trim().toLowerCase();
+            return { fromEmail, fromName: fromName || fromEmail };
+        }
+
+        const emailOnly = raw.toLowerCase();
+        return { fromEmail: emailOnly, fromName: emailOnly };
+    }
+
+    public async listUnreadInbox(limit: number = 10): Promise<Array<{ id: string; threadId?: string; fromEmail: string; fromName: string; subject: string; snippet: string; date: string }>> {
         if (!window.gapi?.client?.gmail) return [];
 
         try {
-            const response = await window.gapi.client.gmail.users.messages.list({
-                'userId': 'me',
-                'q': 'is:unread in:inbox',
-                'maxResults': limit
+            const listRes = await window.gapi.client.gmail.users.messages.list({
+                userId: 'me',
+                maxResults: limit,
+                q: 'in:inbox is:unread -from:me newer_than:14d'
             });
 
-            const messages = response.result.messages || [];
-            const details = [];
+            const messages = listRes.result?.messages || [];
+            if (!Array.isArray(messages) || messages.length === 0) return [];
 
-            for (const msg of messages) {
+            const detailed = await Promise.all(messages.map(async (msg: any) => {
                 const detail = await window.gapi.client.gmail.users.messages.get({
-                    'userId': 'me',
-                    'id': msg.id,
-                    'format': 'metadata', // We only need headers for now
-                    'metadataHeaders': ['From', 'Subject', 'Date']
-                });
-                
-                const headers = detail.result.payload.headers;
-                const subject = headers.find((h: any) => h.name === 'Subject')?.value || '(No Subject)';
-                const from = headers.find((h: any) => h.name === 'From')?.value || '';
-                const date = headers.find((h: any) => h.name === 'Date')?.value || '';
-                
-                // Parse From header "Name <email@domain.com>"
-                let fromEmail = from;
-                let fromName = from;
-                const match = from.match(/(.*)<(.*)>/);
-                if (match) {
-                    fromName = match[1].trim().replace(/^"|"$/g, '');
-                    fromEmail = match[2].trim();
-                }
-
-                details.push({
+                    userId: 'me',
                     id: msg.id,
-                    subject,
-                    from: from,
-                    fromEmail,
-                    fromName,
-                    date,
-                    snippet: detail.result.snippet
+                    format: 'metadata',
+                    metadataHeaders: ['From', 'Subject', 'Date']
                 });
-            }
-            return details;
+
+                const headers = detail.result?.payload?.headers || [];
+                const fromHeader = headers.find((h: any) => h.name === 'From')?.value || '';
+                const subject = headers.find((h: any) => h.name === 'Subject')?.value || '(Konu Yok)';
+                const date = headers.find((h: any) => h.name === 'Date')?.value || new Date().toISOString();
+                const parsedFrom = this.parseFromHeader(fromHeader);
+
+                return {
+                    id: detail.result?.id || msg.id,
+                    threadId: detail.result?.threadId,
+                    fromEmail: parsedFrom.fromEmail,
+                    fromName: parsedFrom.fromName,
+                    subject,
+                    snippet: detail.result?.snippet || '',
+                    date
+                };
+            }));
+
+            return detailed.filter(d => d.fromEmail && d.fromEmail.includes('@'));
         } catch (error) {
-            console.error("Gmail List Error:", error);
+            console.error('Gmail unread inbox fetch failed', error);
             return [];
         }
     }
 
     public async markAsRead(messageId: string): Promise<void> {
-        if (!window.gapi?.client?.gmail) return;
+        if (!window.gapi?.client?.gmail || !messageId) return;
         try {
             await window.gapi.client.gmail.users.messages.modify({
-                'userId': 'me',
-                'id': messageId,
-                'resource': {
-                    'removeLabelIds': ['UNREAD']
+                userId: 'me',
+                id: messageId,
+                resource: {
+                    removeLabelIds: ['UNREAD']
                 }
             });
         } catch (error) {
-            console.error("Gmail Mark Read Error:", error);
+            console.error('Gmail mark as read failed', error);
         }
     }
 }

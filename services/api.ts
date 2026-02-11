@@ -502,9 +502,7 @@ export const api = {
         const log: ActionLog = {
             id: Math.random().toString(36).substr(2, 9),
             timestamp: new Date().toLocaleTimeString('tr-TR', {hour: '2-digit', minute:'2-digit'}),
-            action,
-            detail,
-            type
+            action, detail, type
         };
         if (useSheets()) { await sheetsService.logAction(log); } else { storage.addLog(log); }
     }
