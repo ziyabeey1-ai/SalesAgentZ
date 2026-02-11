@@ -2,6 +2,45 @@
 export class GmailService {
     private static readonly EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
     private static readonly KNOWN_INVALID_DOMAINS = new Set(['example.com', 'email.com', 'test.com', 'localhost', 'localdomain']);
+    private static readonly BLOCKED_LOCAL_PARTS = new Set([
+        'mailer-daemon',
+        'postmaster',
+        'no-reply',
+        'noreply',
+        'bounce',
+        'do-not-reply',
+        'donotreply'
+    ]);
+    private static readonly BOUNCE_SUBJECT_PATTERNS = [
+        /delivery status notification/i,
+        /delivery failure/i,
+        /mail delivery failed/i,
+        /undeliverable/i,
+        /returned mail/i,
+        /failure notice/i,
+        /rejected/i,
+        /bounce/i
+    ];
+
+    private getLocalPart(email: string): string {
+        const normalized = (email || '').trim().toLowerCase();
+        const atIndex = normalized.lastIndexOf('@');
+        if (atIndex <= 0) return '';
+        return normalized.slice(0, atIndex).trim();
+    }
+
+    private isBlockedMailbox(email: string): boolean {
+        const localPart = this.getLocalPart(email);
+        if (!localPart) return false;
+
+        if (GmailService.BLOCKED_LOCAL_PARTS.has(localPart)) return true;
+        return [...GmailService.BLOCKED_LOCAL_PARTS].some(blocked => localPart.includes(blocked));
+    }
+
+    private isBounceLikeSubject(subject: string): boolean {
+        const normalized = (subject || '').trim();
+        return GmailService.BOUNCE_SUBJECT_PATTERNS.some(pattern => pattern.test(normalized));
+    }
 
     private extractDomain(email: string): string | null {
         const normalized = (email || '').trim().toLowerCase();
@@ -30,6 +69,10 @@ export class GmailService {
         const normalizedEmail = (recipientEmail || '').trim().toLowerCase();
         if (!GmailService.EMAIL_REGEX.test(normalizedEmail)) {
             throw new Error(`ALICI_EMAIL_GECERSIZ:${recipientEmail}`);
+        }
+
+        if (this.isBlockedMailbox(normalizedEmail)) {
+            throw new Error(`ALICI_BLOKLU_MAILBOX:${recipientEmail}`);
         }
 
         const domain = this.extractDomain(normalizedEmail);
@@ -186,7 +229,12 @@ export class GmailService {
                 };
             }));
 
-            return detailed.filter(d => d.fromEmail && d.fromEmail.includes('@'));
+            return detailed.filter(d => {
+                if (!d.fromEmail || !d.fromEmail.includes('@')) return false;
+                if (this.isBlockedMailbox(d.fromEmail)) return false;
+                if (this.isBounceLikeSubject(d.subject)) return false;
+                return true;
+            });
         } catch (error) {
             console.error('Gmail unread inbox fetch failed', error);
             return [];

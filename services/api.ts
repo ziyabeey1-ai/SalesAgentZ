@@ -68,6 +68,64 @@ export const api = {
         } else {
             storage.addInteraction(interaction);
         }
+    },
+    discover: async (sector: string, district: string): Promise<Lead[]> => {
+        try {
+            const ai = new GoogleGenAI({ apiKey: getApiKey() });
+            const prompt = `
+              GÖREV: İstanbul, ${district} bölgesindeki "${sector}" sektöründe hizmet veren işletmeleri bul.
+              Google Search kullanarak gerçek ve güncel verileri çek.
+              
+              JSON ÇIKTI FORMATI:
+              {
+                "leads": [
+                  {
+                    "firma_adi": "...",
+                    "adres": "...",
+                    "telefon": "...",
+                    "email": "info@firma.com (Varsa)", 
+                    "web_sitesi_durumu": "Var/Yok",
+                    "ilce": "${district}",
+                    "sektor": "${sector}"
+                  }
+                ]
+              }
+            `;
+            
+            const result = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: prompt,
+                config: {
+                    tools: [{ googleSearch: {} }],
+                    responseMimeType: 'application/json'
+                }
+            });
+            
+            const text = result.text || '{}';
+            const parsed = JSON.parse(text);
+            const rawLeads = parsed.leads || [];
+            
+            return rawLeads.map((l: any) => ({
+                id: Math.random().toString(36).substr(2, 9),
+                firma_adi: l.firma_adi,
+                sektor: l.sektor || sector,
+                ilce: l.ilce || district,
+                adres: l.adres,
+                telefon: l.telefon || '',
+                email: l.email || '',
+                kaynak: 'AI Asistan',
+                websitesi_var_mi: l.web_sitesi_durumu === 'Var' ? 'Evet' : 'Hayır',
+                lead_durumu: 'aktif',
+                lead_skoru: l.email ? 2 : 1, // Basic score
+                eksik_alanlar: l.email ? [] : ['email'],
+                son_kontakt_tarihi: new Date().toISOString().slice(0, 10),
+                notlar: 'Otonom keşif ile eklendi.'
+            })) as Lead[];
+
+        } catch (e) {
+            console.error("Discovery API error", e);
+            return [];
+        }
     }
   },
   
@@ -88,7 +146,43 @@ export const api = {
           // Simulate email sending delay
           await new Promise(resolve => setTimeout(resolve, 800));
           console.log("Local Simulation: Email Sent:", { to, subject });
-          return { id: 'local-mock-id' };
+          return { id: 'local-mock-id', _status: 'mock' };
+      },
+      syncReplies: async (leads: Lead[]): Promise<{ synced: number }> => {
+          if (!useSheets()) {
+              return { synced: 0 };
+          }
+
+          try {
+              const unreadMessages = await gmailService.listUnreadInbox(20); 
+              let syncedCount = 0;
+
+              for (const msg of unreadMessages) {
+                  const lead = leads.find(l => l.email && l.email.toLowerCase() === msg.fromEmail.toLowerCase());
+                  
+                  if (lead) {
+                      await api.leads.logInteraction(lead.id, 'email', `[Gelen Yanıt] ${msg.subject}`, {
+                          sentiment: 'neutral',
+                          intent: 'other',
+                          suggested_reply: '',
+                          suggested_status: 'onay_bekliyor'
+                      });
+
+                      await api.leads.update({ 
+                          ...lead, 
+                          lead_durumu: 'onay_bekliyor',
+                          notlar: (lead.notlar || '') + `\n[Inbox]: ${msg.snippet}`
+                      });
+
+                      await gmailService.markAsRead(msg.id);
+                      syncedCount++;
+                  }
+              }
+              return { synced: syncedCount };
+          } catch (e) {
+              console.error("Sync replies error", e);
+              return { synced: 0 };
+          }
       }
   },
 
