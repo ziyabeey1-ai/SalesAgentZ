@@ -76,6 +76,8 @@ const MailAutomation: React.FC = () => {
       setQueue(newQueue.sort((a,b) => b.score - a.score));
   };
 
+
+
   const getDeterministicVariant = (lead: Lead, optionCount: number) => {
       if (optionCount <= 1) return 0;
       const key = `${lead.id}-${lead.firma_adi}-${lead.sektor}`;

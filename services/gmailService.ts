@@ -133,6 +133,73 @@ export class GmailService {
             throw error;
         }
     }
+
+    public async listUnreadInbox(limit: number = 10): Promise<any[]> {
+        if (!window.gapi?.client?.gmail) return [];
+
+        try {
+            const response = await window.gapi.client.gmail.users.messages.list({
+                'userId': 'me',
+                'q': 'is:unread in:inbox',
+                'maxResults': limit
+            });
+
+            const messages = response.result.messages || [];
+            const details = [];
+
+            for (const msg of messages) {
+                const detail = await window.gapi.client.gmail.users.messages.get({
+                    'userId': 'me',
+                    'id': msg.id,
+                    'format': 'metadata', // We only need headers for now
+                    'metadataHeaders': ['From', 'Subject', 'Date']
+                });
+                
+                const headers = detail.result.payload.headers;
+                const subject = headers.find((h: any) => h.name === 'Subject')?.value || '(No Subject)';
+                const from = headers.find((h: any) => h.name === 'From')?.value || '';
+                const date = headers.find((h: any) => h.name === 'Date')?.value || '';
+                
+                // Parse From header "Name <email@domain.com>"
+                let fromEmail = from;
+                let fromName = from;
+                const match = from.match(/(.*)<(.*)>/);
+                if (match) {
+                    fromName = match[1].trim().replace(/^"|"$/g, '');
+                    fromEmail = match[2].trim();
+                }
+
+                details.push({
+                    id: msg.id,
+                    subject,
+                    from: from,
+                    fromEmail,
+                    fromName,
+                    date,
+                    snippet: detail.result.snippet
+                });
+            }
+            return details;
+        } catch (error) {
+            console.error("Gmail List Error:", error);
+            return [];
+        }
+    }
+
+    public async markAsRead(messageId: string): Promise<void> {
+        if (!window.gapi?.client?.gmail) return;
+        try {
+            await window.gapi.client.gmail.users.messages.modify({
+                'userId': 'me',
+                'id': messageId,
+                'resource': {
+                    'removeLabelIds': ['UNREAD']
+                }
+            });
+        } catch (error) {
+            console.error("Gmail Mark Read Error:", error);
+        }
+    }
 }
 
 export const gmailService = new GmailService();

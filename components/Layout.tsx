@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useRef } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { 
@@ -33,7 +34,7 @@ import {
 import { useAgent } from '../context/AgentContext';
 import { gamificationService } from '../services/gamificationService';
 import { firebaseService } from '../services/firebaseService';
-import { UserProgress } from '../types';
+import { UserProgress, AgentConfig } from '../types';
 import { DISTRICTS, SECTORS } from '../constants';
 
 interface LayoutProps {
@@ -337,11 +338,25 @@ const Layout: React.FC<LayoutProps> = ({ children, toggleAssistant }) => {
                                       {SECTORS.map(s => <option key={s} value={s}>{s}</option>)}
                                   </select>
                               </div>
+                              <div>
+                                  <label className="text-xs font-medium text-slate-500 flex items-center gap-1 mb-1">
+                                      <Target size={12} /> Çalışma Modu
+                                  </label>
+                                  <select
+                                      className="w-full text-xs border border-slate-200 rounded-lg p-2 outline-none focus:border-indigo-500"
+                                      value={agentConfig.focusMode}
+                                      onChange={(e) => updateAgentConfig({ focusMode: e.target.value as AgentConfig['focusMode'] })}
+                                  >
+                                      <option value="balanced">Dengeli</option>
+                                      <option value="discovery_only">Sadece Keşif</option>
+                                      <option value="outreach_only">Sadece Outreach</option>
+                                  </select>
+                              </div>
                           </div>
                           
                           <div className="mt-3 pt-3 border-t border-slate-100">
                               <p className="text-[10px] text-slate-400">
-                                  Ajan sadece seçili bölge ve sektörde arama/zenginleştirme yapar.
+                                  Ajan seçili bölge/sektöre göre çalışır; mod seçimi keşif ve outreach adımlarını sınırlar.
                               </p>
                           </div>
                       </div>

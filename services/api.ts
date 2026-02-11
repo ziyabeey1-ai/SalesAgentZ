@@ -1,4 +1,3 @@
-
 import { Lead, DashboardStats, Task, ActionLog, Interaction, EmailTemplate, InteractionAnalysis, InteractionType, PricingPackage, MarketStrategyResult, StrategyResult, CompetitorAnalysis, InstagramAnalysis, UserProfile, LeadScoreDetails, PersonaAnalysis } from '../types';
 import { sheetsService } from './googleSheetsService';
 import { gmailService } from './gmailService';
@@ -27,6 +26,33 @@ const KNOWN_INVALID_DOMAINS = new Set([
 ]);
 
 const normalizeEmail = (email: string): string => email.trim().toLowerCase();
+
+const BOUNCE_SENDER_FRAGMENTS = ['mailer-daemon', 'postmaster', 'mail delivery subsystem', 'mail delivery system'];
+const BOUNCE_SUBJECT_REGEX = /(delivery status notification|undeliverable|failure notice|returned mail|address not found|blocked|delivery has failed|rejected)/i;
+
+const extractEmailsFromText = (text: string): string[] => {
+    if (!text) return [];
+    const matches = text.toLowerCase().match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g) || [];
+    return Array.from(new Set(matches.map(m => m.trim())));
+};
+
+const isBounceMessage = (msg: { fromEmail: string; fromName: string; subject: string; snippet: string }): boolean => {
+    const from = `${msg.fromEmail || ''} ${msg.fromName || ''}`.toLowerCase();
+    const subject = msg.subject || '';
+    const snippet = msg.snippet || '';
+    return BOUNCE_SENDER_FRAGMENTS.some(fragment => from.includes(fragment)) ||
+        BOUNCE_SUBJECT_REGEX.test(subject) ||
+        /adres bulunamadı|ileti engellendi|mail delivery/i.test(snippet);
+};
+
+const findLeadByBounceContent = (msg: { subject: string; snippet: string }, leadMap: Map<string, Lead>): Lead | null => {
+    const candidates = extractEmailsFromText(`${msg.subject || ''} ${msg.snippet || ''}`);
+    for (const candidate of candidates) {
+        const lead = leadMap.get(candidate);
+        if (lead) return lead;
+    }
+    return null;
+};
 
 type SenderVoice = {
     description: string;
@@ -378,6 +404,84 @@ export const api = {
           await new Promise(resolve => setTimeout(resolve, 800));
           console.warn(`[MOCK EMAIL] To: ${to}, Subject: ${subject}`);
           return { id: 'local-mock-id', _status: 'mock' };
+      },
+      syncReplies: async (leads: Lead[]): Promise<{ synced: number; matched: number }> => {
+          if (!canUseGoogleWorkspaceApis()) return { synced: 0, matched: 0 };
+
+          const inboxMessages = await gmailService.listUnreadInbox(20);
+          if (inboxMessages.length === 0) return { synced: 0, matched: 0 };
+
+          const normalizedLeadMap = new Map<string, Lead>();
+          leads.forEach(lead => {
+              const key = normalizeEmail(lead.email || '');
+              if (key) normalizedLeadMap.set(key, lead);
+          });
+
+          const currentInteractions = useSheets() ? await sheetsService.getInteractions() : storage.getInteractions();
+          let synced = 0;
+          let matched = 0;
+
+          for (const msg of inboxMessages) {
+              const isBounce = isBounceMessage(msg);
+              let lead = normalizedLeadMap.get(normalizeEmail(msg.fromEmail));
+              if (!lead && isBounce) {
+                  lead = findLeadByBounceContent(msg, normalizedLeadMap) || undefined;
+              }
+              if (!lead) continue;
+              matched += 1;
+
+              const marker = `[GMAIL:${msg.id}]`;
+              const alreadyLogged = currentInteractions.some(int => int.leadId === lead.id && (int.summary || '').includes(marker));
+
+              if (!alreadyLogged) {
+                  const parsedDate = new Date(msg.date);
+                  const interactionDate = Number.isNaN(parsedDate.getTime())
+                      ? new Date()
+                      : parsedDate;
+
+                  const interaction: Interaction = {
+                      id: Math.random().toString(36).substr(2, 9),
+                      leadId: lead.id,
+                      type: 'email',
+                      direction: 'inbound',
+                      date: interactionDate.toISOString().slice(0, 10),
+                      time: interactionDate.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+                      summary: `${marker} ${msg.subject} — ${(msg.snippet || '').slice(0, 180)}`,
+                      status: isBounce ? 'failed' : 'replied'
+                  };
+
+                  if (useSheets()) {
+                      await sheetsService.addInteraction(interaction);
+                  } else {
+                      storage.addInteraction(interaction);
+                  }
+
+                  const updatedLead: Lead = {
+                      ...lead,
+                      lead_durumu: isBounce
+                          ? (lead.lead_durumu === 'olumlu' ? 'olumlu' : 'gecersiz')
+                          : (lead.lead_durumu === 'olumlu' ? 'olumlu' : 'onay_bekliyor'),
+                      son_kontakt_tarihi: new Date().toISOString().slice(0, 10),
+                      notlar: isBounce
+                          ? `${lead.notlar || ''}\n[Inbox]: Teslimat hatası tespit edildi (${msg.subject}). Email adresi geçersiz/engelli olabilir.`.trim()
+                          : `${lead.notlar || ''}\n[Inbox]: ${msg.fromName} yanıt verdi — ${msg.subject}`.trim()
+                  };
+                  await api.leads.update(updatedLead);
+                  synced += 1;
+
+                  if (isBounce) {
+                      await api.dashboard.logAction('Bounce Tespit', `${lead.firma_adi} için teslimat hatası alındı`, 'warning');
+                  }
+              }
+
+              await gmailService.markAsRead(msg.id);
+          }
+
+          if (synced > 0) {
+              await api.dashboard.logAction('Inbox Senkronizasyonu', `${synced} yeni gelen mail yanıtı işlendi`, 'info');
+          }
+
+          return { synced, matched };
       }
   },
   whatsapp: {
@@ -398,7 +502,9 @@ export const api = {
         const log: ActionLog = {
             id: Math.random().toString(36).substr(2, 9),
             timestamp: new Date().toLocaleTimeString('tr-TR', {hour: '2-digit', minute:'2-digit'}),
-            action, detail, type
+            action,
+            detail,
+            type
         };
         if (useSheets()) { await sheetsService.logAction(log); } else { storage.addLog(log); }
     }
@@ -539,6 +645,8 @@ export const api = {
             { name: 'Teklif', value: leads.filter(l => l.lead_durumu === 'teklif_gonderildi').length, fill: '#f59e0b' },
             { name: 'Satış', value: leads.filter(l => l.lead_durumu === 'olumlu').length, fill: '#10b981' },
         ];
+
+        // Weekly Trend
         const weeklyTrend = [];
         const today = new Date();
         for (let i = 6; i >= 0; i--) {
@@ -546,11 +654,17 @@ export const api = {
             d.setDate(today.getDate() - i);
             const dateStr = d.toISOString().slice(0, 10);
             const dayName = d.toLocaleDateString('tr-TR', { weekday: 'short' });
+
             const sentCount = interactions.filter(int => int.date === dateStr && int.direction === 'outbound').length;
             const responseCount = interactions.filter(int => int.date === dateStr && int.direction === 'inbound').length;
-            weeklyTrend.push({ name: dayName, sent: sentCount, response: responseCount });
+
+            weeklyTrend.push({
+                name: dayName,
+                sent: sentCount,
+                response: responseCount
+            });
         }
-        
+
         // Sector Success
         const sectors: Record<string, { total: number, success: number }> = {};
         leads.forEach(l => {
@@ -571,7 +685,7 @@ export const api = {
         return { funnel, weeklyTrend, sectorSuccessRate };
     }
   },
-  
+
   briefing: {
       generateAndPlay: async () => {
           const apiKey = getApiKey();
@@ -640,13 +754,17 @@ export const api = {
 
           const prompt = `
             GÖREV: Bir satış eğitim simülasyonunu değerlendir.
+            
             SENARYO: ${scenario}
+            
             DİYALOG GEÇMİŞİ:
             ${transcript}
+            
             DEĞERLENDİRME KRİTERLERİ:
             1. Empati: Müşteriyi anladı mı?
             2. İkna: İtirazları mantıklı karşıladı mı?
             3. Profesyonellik: Tonu ve dili uygun muydu?
+            
             ÇIKTI FORMATI (JSON):
             {
                 "score": 0-100 arası bir puan,
@@ -662,133 +780,149 @@ export const api = {
           });
 
           const data = parseGeminiJson(response.text || '{}');
+          
+          // Gamification Reward
           if (data.score && data.score >= 70) {
-              gamificationService.recordAction('deal_won'); 
+              // Award heavy XP for passing training
+              gamificationService.recordAction('deal_won'); // Re-using deal_won trigger for 500xp simulation
           }
+
           return data;
       }
   },
 
-  visuals: {
-      generateHeroImage: async (lead: Lead) => {
-          // Placeholder using unsplash source for demo
-          return `https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=800&q=80`; 
+  strategy: {
+      analyzeMarket: async (sector: string, district: string): Promise<MarketStrategyResult> => {
+          const ai = new GoogleGenAI({ apiKey: getApiKey() });
+          const prompt = `Analiz: ${district} bölgesindeki ${sector} sektörü için pazar analizi yap.`;
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: prompt,
+              config: { responseMimeType: 'application/json' }
+          });
+          return parseGeminiJson(response.text || '{}') as MarketStrategyResult;
       },
-      generateSocialPostImage: async (prompt: string) => {
-          return `https://images.unsplash.com/photo-1611162617474-5b21e879e113?w=800&q=80`;
+      predictNextMove: async (lead: Lead): Promise<StrategyResult> => {
+          const ai = new GoogleGenAI({ apiKey: getApiKey() });
+          const prompt = `Analiz: ${lead.firma_adi} için sonraki hamle tahmini.`;
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: prompt,
+              config: { responseMimeType: 'application/json' }
+          });
+          return parseGeminiJson(response.text || '{}') as StrategyResult;
+      },
+      analyzePersona: async (lead: Lead): Promise<PersonaAnalysis> => {
+          const ai = new GoogleGenAI({ apiKey: getApiKey() });
+          const prompt = `Analiz: ${lead.firma_adi} yetkilisi için persona analizi.`;
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: prompt,
+              config: { responseMimeType: 'application/json' }
+          });
+          return parseGeminiJson(response.text || '{}') as PersonaAnalysis;
+      },
+      calculateLeadScore: async (lead: Lead): Promise<LeadScoreDetails> => {
+          const ai = new GoogleGenAI({ apiKey: getApiKey() });
+          const prompt = `Analiz: ${lead.firma_adi} için lead skorlaması.`;
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: prompt,
+              config: { responseMimeType: 'application/json' }
+          });
+          return parseGeminiJson(response.text || '{}') as LeadScoreDetails;
+      }
+  },
+
+  visuals: {
+      generateHeroImage: async (lead: Lead): Promise<string> => {
+          const ai = new GoogleGenAI({ apiKey: getApiKey() });
+          const response = await ai.models.generateContent({
+              model: 'gemini-2.5-flash-image',
+              contents: {
+                  parts: [{ text: `Modern, professional website hero image for ${lead.firma_adi}, sector: ${lead.sektor}, location: ${lead.ilce}` }]
+              },
+              config: {
+                  imageConfig: { aspectRatio: "16:9" }
+              }
+          });
+          
+          let base64Image = '';
+          if (response.candidates?.[0]?.content?.parts) {
+              for (const part of response.candidates[0].content.parts) {
+                  if (part.inlineData) {
+                      base64Image = `data:image/png;base64,${part.inlineData.data}`;
+                      break;
+                  }
+              }
+          }
+          if (!base64Image) {
+              // fallback mock
+              return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+          }
+          return base64Image;
+      },
+      generateSocialPostImage: async (prompt: string): Promise<string> => {
+          const ai = new GoogleGenAI({ apiKey: getApiKey() });
+          const response = await ai.models.generateContent({
+              model: 'gemini-2.5-flash-image',
+              contents: { parts: [{ text: prompt }] },
+              config: { imageConfig: { aspectRatio: "1:1" } }
+          });
+          let base64Image = '';
+          if (response.candidates?.[0]?.content?.parts) {
+              for (const part of response.candidates[0].content.parts) {
+                  if (part.inlineData) {
+                      base64Image = `data:image/png;base64,${part.inlineData.data}`;
+                      break;
+                  }
+              }
+          }
+          return base64Image;
       }
   },
 
   social: {
       analyzeInstagram: async (lead: Lead): Promise<InstagramAnalysis> => {
-          // Mock/Simulation
-          return {
-              username: lead.firma_adi.toLowerCase().replace(/ /g, ''),
-              bio: `${lead.sektor} sektöründe lider hizmet.`,
-              recentPostTheme: "Müşteri memnuniyeti",
-              suggestedDmOpener: "Harika paylaşımlarınız var!",
-              lastAnalyzed: new Date().toISOString()
-          };
+          const ai = new GoogleGenAI({ apiKey: getApiKey() });
+          const prompt = `Instagram analizi: ${lead.firma_adi}`;
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: prompt,
+              config: { 
+                  tools: [{ googleSearch: {} }],
+                  responseMimeType: 'application/json' 
+              }
+          });
+          return parseGeminiJson(response.text || '{}') as InstagramAnalysis;
       }
   },
 
   competitors: {
       analyze: async (lead: Lead): Promise<CompetitorAnalysis> => {
           const ai = new GoogleGenAI({ apiKey: getApiKey() });
-          const prompt = `Analyze competitors for ${lead.firma_adi} in ${lead.sektor}, ${lead.ilce}. Return JSON with competitors list and summary.`;
-          try {
-              const res = await ai.models.generateContent({
-                  model: 'gemini-3-flash-preview',
-                  contents: prompt,
-                  config: { responseMimeType: 'application/json' }
-              });
-              const json = parseGeminiJson(res.text || '{}');
-              return {
-                  competitors: json.competitors || [],
-                  summary: json.summary || 'Analiz tamamlandı.',
-                  lastUpdated: new Date().toISOString()
-              };
-          } catch (e) {
-              return { competitors: [], summary: 'Analiz hatası', lastUpdated: new Date().toISOString() };
-          }
-      }
-  },
-
-  strategy: {
-      analyzeMarket: async (sector: string, district: string): Promise<MarketStrategyResult> => {
-           // Mock return matching type
-           return {
-               marketAnalysis: {
-                   sectorDigitalMaturity: 7,
-                   regionEconomicActivity: 8,
-                   seasonalFactor: 'Yüksek',
-                   overallOpportunity: 'Yüksek'
-               },
-               idealLeadProfile: {
-                   companyAge: '1-5 Yıl',
-                   employeeCount: '5-20',
-                   estimatedRevenue: '5M+',
-                   digitalMaturity: 4,
-                   hasWebsite: true,
-                   reasoning: 'Bölge analizi sonucu.'
-               },
-               strategyPriority: [],
-               regionRotation: [],
-               actionPlan: {
-                   nextCycle: 'Hemen',
-                   expectedLeadQuality: 'Yüksek',
-                   estimatedConversion: '20%'
-               },
-               lastUpdated: new Date().toISOString()
-           };
-      },
-      predictNextMove: async (lead: Lead): Promise<StrategyResult> => {
-          const ai = new GoogleGenAI({ apiKey: getApiKey() });
-          try {
-              const res = await ai.models.generateContent({
-                  model: 'gemini-3-flash-preview',
-                  contents: `Predict strategy for lead ${lead.firma_adi}. JSON output.`,
-                  config: { responseMimeType: 'application/json' }
-              });
-              const json = parseGeminiJson(res.text || '{}');
-              return {
-                  possibleQuestions: json.possibleQuestions || [],
-                  recommendedTone: json.recommendedTone || 'neutral',
-                  reasoning: json.reasoning || 'AI reasoning.'
-              };
-          } catch (e) {
-              return { possibleQuestions: [], recommendedTone: 'neutral', reasoning: 'Hata.' };
-          }
-      },
-      calculateLeadScore: async (lead: Lead): Promise<LeadScoreDetails> => {
-          return {
-              categoryScores: { website: 0, seo: 0, socialMedia: 0, onlineSystem: 0, contentQuality: 0, competitorGap: 0, sectorUrgency: 0 },
-              bonusFactors: {},
-              totalScore: 50,
-              finalLeadScore: 3,
-              digitalWeaknesses: [],
-              opportunityAreas: [],
-              estimatedConversionProbability: 'Orta',
-              reasoning: 'Otomatik skor.',
-              lastCalculated: new Date().toISOString()
-          };
-      },
-      analyzePersona: async (lead: Lead): Promise<PersonaAnalysis> => {
-          return {
-              type: 'Analitik',
-              traits: [],
-              communicationStyle: 'Net',
-              reasoning: 'Varsayılan.'
-          };
+          const prompt = `Rakip analizi: ${lead.firma_adi} (${lead.sektor})`;
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: prompt,
+              config: { 
+                  tools: [{ googleSearch: {} }],
+                  responseMimeType: 'application/json' 
+              }
+          });
+          return parseGeminiJson(response.text || '{}') as CompetitorAnalysis;
       }
   },
 
   system: {
-      testApiKey: async (key: string) => {
+      testApiKey: async (key: string): Promise<{ success: boolean; message: string }> => {
           try {
               const ai = new GoogleGenAI({ apiKey: key });
-              await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: 'test' });
-              return { success: true, message: 'Valid' };
+              await ai.models.generateContent({
+                  model: 'gemini-3-flash-preview',
+                  contents: 'test',
+              });
+              return { success: true, message: 'Bağlantı Başarılı' };
           } catch (e: any) {
               return { success: false, message: e.message };
           }
@@ -796,41 +930,25 @@ export const api = {
   },
 
   setup: {
-      generatePackages: async (baseCost: number, margin: number, type: string): Promise<PricingPackage[]> => {
+      generatePackages: async (cost: number, margin: number, type: string): Promise<PricingPackage[]> => {
           const ai = new GoogleGenAI({ apiKey: getApiKey() });
-          const prompt = `
-            Hizmet: ${type}
-            Maliyet: ${baseCost} TL
-            Kar Marjı: %${margin}
-            Buna göre 3 adet fiyatlandırma paketi (Başlangıç, Profesyonel, Premium) oluştur.
-            Özellikler listesi, fiyat, maliyet ve kar hesapla.
-            JSON döndür: { "packages": [ { "id": "p1", "name": "...", "price": 0, "cost": 0, "profit": 0, "features": [], "description": "" } ] }
-          `;
-          try {
-              const result = await ai.models.generateContent({
-                  model: 'gemini-3-flash-preview',
-                  contents: prompt,
-                  config: { responseMimeType: 'application/json' }
-              });
-              const data = parseGeminiJson(result.text || '{}');
-              return data.packages || [];
-          } catch (e) {
-              return [];
-          }
+          const prompt = `Fiyatlandırma paketleri oluştur. Maliyet: ${cost}, Kar marjı: ${margin}%, Tip: ${type}`;
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: prompt,
+              config: { responseMimeType: 'application/json' }
+          });
+          return parseGeminiJson(response.text || '[]') as PricingPackage[];
       },
       generateInitialTemplates: async (packages: PricingPackage[]): Promise<EmailTemplate[]> => {
-          return [
-              {
-                  id: 't-intro-1',
-                  name: 'Tanışma (Genel)',
-                  type: 'intro',
-                  subject: '{firma_adi} için Dijital Fırsat',
-                  body: 'Merhaba {yetkili},\n\n{ilce} bölgesindeki işletmeleri incelerken sizi gördüm...',
-                  isActive: true,
-                  useCount: 0,
-                  successCount: 0
-              }
-          ];
+          const ai = new GoogleGenAI({ apiKey: getApiKey() });
+          const prompt = `Email şablonları oluştur. Paketler: ${JSON.stringify(packages)}`;
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: prompt,
+              config: { responseMimeType: 'application/json' }
+          });
+          return parseGeminiJson(response.text || '[]') as EmailTemplate[];
       }
   }
 };

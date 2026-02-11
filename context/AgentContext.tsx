@@ -329,6 +329,20 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
     };
 
+    const performInboxReplySync = async (leads: Lead[]): Promise<boolean> => {
+        try {
+            const result = await api.gmail.syncReplies(leads);
+            if (result.synced > 0) {
+                setAgentStatus(`Inbox güncellendi: ${result.synced} yeni yanıt`);
+                addThought('info', `Gelen kutusundan ${result.synced} yeni yanıt lead'lerle eşleştirildi.`);
+                return true;
+            }
+        } catch (e) {
+            console.error('Inbox sync error', e);
+        }
+        return false;
+    };
+
     const performAutoEnrichment = async (leads: Lead[]): Promise<boolean> => {
         const { targetDistrict, targetSector } = configRef.current;
         const now = Date.now();
@@ -587,6 +601,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         try {
             const response = await api.gmail.send(lead.email, subject, body);
+            await api.templates.recordUsage(bestTemplate.id, lead.sektor);
             await api.leads.logInteraction(lead.id, 'email', `Otomatik outreach: ${subject}`);
             await api.leads.update({
                 ...lead,
@@ -650,22 +665,23 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         try {
             const leads = await api.leads.getAll();
             let actionTaken = false;
+            const focusMode = configRef.current.focusMode;
+            const allowDiscovery = focusMode !== 'outreach_only';
+            const allowOutreach = focusMode !== 'discovery_only';
             
             // --- PRIORITY 1: MAINTENANCE & CLEANUP (Safe 24/7, FREE) ---
             if (!actionTaken) actionTaken = await performLeadSanitization(leads);
 
             // --- PRIORITY 2: ENRICHMENT (Safe 24/7) ---
-            // Find emails for existing leads
-            if (!actionTaken) actionTaken = await performAutoEnrichment(leads);
+            if (allowDiscovery && !actionTaken) actionTaken = await performAutoEnrichment(leads);
 
             // --- PRIORITY 3: DISCOVERY (Safe 24/7) ---
-            // Refill pipeline if low
-            if (!actionTaken) actionTaken = await performSmartDiscovery(leads);
+            if (allowDiscovery && !actionTaken) actionTaken = await performSmartDiscovery(leads);
 
             // --- PRIORITY 4: ACTIVE COMMUNICATION (Now 24/7 Enabled) ---
-            // Removed isDaytime check to ensure 24/7 operation
-            if (!actionTaken) actionTaken = await performAutoReplyDrafting(leads, false); // Send allowed
-            if (!actionTaken) actionTaken = await performOutreach(leads);
+            if (allowOutreach && !actionTaken) actionTaken = await performInboxReplySync(leads);
+            if (allowOutreach && !actionTaken) actionTaken = await performAutoReplyDrafting(leads, false); // Send allowed
+            if (allowOutreach && !actionTaken) actionTaken = await performOutreach(leads);
 
             if (actionTaken) {
                 burstStreakRef.current += 1;
