@@ -54,41 +54,130 @@ const MailAutomation: React.FC = () => {
 
   const calculateQueue = (leadsData: Lead[], templatesData: EmailTemplate[]) => {
       const newQueue: QueueItem[] = [];
-      const introTemplate = templatesData.find(t => t.type === 'intro' && t.isActive);
+      const introTemplates = templatesData.filter(t => t.type === 'intro');
 
       leadsData.forEach(lead => {
-          if (lead.lead_durumu === 'aktif' && introTemplate) {
-              newQueue.push({
-                  id: `q-${lead.id}`,
-                  lead,
-                  template: introTemplate,
-                  score: lead.lead_skoru,
-                  status: 'pending',
-                  reason: 'Yeni Lead - Tanışma'
-              });
-          }
+          if (lead.lead_durumu !== 'aktif' || introTemplates.length === 0) return;
+
+          const picked = pickSmartIntroTemplate(lead, introTemplates);
+
+          newQueue.push({
+              id: `q-${lead.id}`,
+              lead,
+              template: picked.template,
+              score: lead.lead_skoru,
+              status: 'pending',
+              reason: introTemplates.length > 1
+                  ? `Akıllı Taslak Seçimi #${picked.variant + 1} · ${picked.strategy}`
+                  : 'Yeni Lead - Dinamik Tanışma'
+          });
       });
       
       setQueue(newQueue.sort((a,b) => b.score - a.score));
   };
 
+
+
+  const getDeterministicVariant = (lead: Lead, optionCount: number) => {
+      if (optionCount <= 1) return 0;
+      const key = `${lead.id}-${lead.firma_adi}-${lead.sektor}`;
+      let hash = 0;
+      for (let i = 0; i < key.length; i++) {
+          hash = (hash << 5) - hash + key.charCodeAt(i);
+          hash |= 0;
+      }
+      return Math.abs(hash) % optionCount;
+  };
+
+  const getTemplateSectorWinRate = (template: EmailTemplate, sector: string) => {
+      const sec = template.sectorStats?.[sector];
+      if (sec && sec.useCount > 0) return sec.successCount / sec.useCount;
+      if ((template.useCount || 0) > 0) return (template.successCount || 0) / (template.useCount || 1);
+      return 0.15; // cold-start default
+  };
+
+  const pickSmartIntroTemplate = (lead: Lead, introTemplates: EmailTemplate[]) => {
+      if (introTemplates.length === 1) return { template: introTemplates[0], variant: 0, strategy: 'Tek intro şablon mevcut' };
+
+      const scored = introTemplates.map((template, index) => {
+          const winRate = getTemplateSectorWinRate(template, lead.sektor);
+          const randomizer = getDeterministicVariant({ ...lead, id: `${lead.id}-${template.id}` }, 100) / 100;
+          const recencyPenalty = lead.lastUsedTemplateId === template.id ? -0.2 : 0;
+          const activeBoost = template.isActive ? 0.05 : 0;
+          const score = winRate + (randomizer * 0.08) + recencyPenalty + activeBoost;
+          return { template, index, score, winRate };
+      }).sort((a, b) => b.score - a.score);
+
+      const winner = scored[0];
+      const strategy = `Sektör başarı skoru: %${Math.round(winner.winRate * 100)}`;
+      return { template: winner.template, variant: winner.index, strategy };
+  };
+
+  const buildSectorMessage = (lead: Lead, variant: number) => {
+      const weakness = lead.scoreDetails?.digitalWeaknesses?.[0] || lead.digitalWeakness;
+      const websiteState = lead.websitesi_var_mi === 'Hayır'
+          ? `${lead.ilce} bölgesinde sizi arayan kişiler karşısında güçlü bir dijital vitrin göremiyor.`
+          : `Mevcut web varlığınız dönüşüm potansiyelini tam kullanmıyor.`;
+
+      const options = [
+          `${lead.sektor} tarafında ${lead.ilce} bölgesinde görünürlük son aylarda daha rekabetçi hale geldi.`,
+          `${lead.ilce} çevresinde ${lead.sektor} aramalarında sizi öne çıkaracak birkaç net fırsat gördüm.`,
+          `${lead.sektor} müşterileri karar vermeden önce dijitalde hızlı karşılaştırma yapıyor; burada güçlü bir fırsat var.`,
+          `${lead.firma_adi} için özellikle ilk temas ve güven inşasında dijital görünümünüzü güçlendirebiliriz.`,
+          websiteState,
+          weakness ? `Özellikle "${weakness}" tarafında hızlı iyileştirme alanı dikkat çekiyor.` : websiteState
+      ];
+      return options[variant % options.length];
+  };
+
+  const buildCallToAction = (lead: Lead, variant: number) => {
+      const highPriority = (lead.scoreDetails?.finalLeadScore || lead.lead_skoru || 1) >= 4;
+      const persona = lead.personaAnalysis?.type;
+      const personaCTA = persona === 'Analitik'
+          ? `${lead.firma_adi} için mini bir fırsat özeti paylaşmamı ister misiniz?`
+          : persona === 'Dominant'
+            ? `İsterseniz doğrudan net aksiyon planını 10 dakikada çıkaralım.`
+            : `${lead.firma_adi} için kısa bir görüşme planlayabilir miyiz?`;
+
+      const options = [
+          `Uygunsanız bu hafta 10 dakikalık kısa bir ön değerlendirme yapabiliriz.`,
+          `${lead.firma_adi} için 2-3 hızlı öneri paylaşmam için kısa bir görüşme planlayabilir miyiz?`,
+          `İsterseniz yarın size özel bir mini yol haritasını kısaca anlatabilirim.`,
+          `Müsait olduğunuz bir saatte, kısa bir görüşmede net aksiyon adımlarını paylaşabilirim.`,
+          personaCTA,
+          highPriority
+              ? `Bu fırsat sıcak görünüyor; bugün/yarın 10 dakikalık bir slot ayırabilir misiniz?`
+              : `Uygun olduğunuzda kısa bir keşif görüşmesi yapabiliriz.`
+      ];
+      return options[variant % options.length];
+  };
+
+  const sanitizeColdBody = (body: string) => {
+      const lines = body.split('\n');
+      const cleaned = lines.filter(line => !/^\s*[-•]?\s*.*(paket|\bTL\b|₺|fiyat|ücret).*$/i.test(line.trim()));
+      return cleaned.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  };
+
   const applyTemplate = (lead: Lead, template: EmailTemplate) => {
       let subject = template.subject;
       let body = template.body;
+      const variant = getDeterministicVariant(lead, 6);
       
       const replacements: Record<string, string> = {
           '{firma_adi}': lead.firma_adi,
           '{yetkili}': lead.yetkili_adi || 'Yetkili',
           '{ilce}': lead.ilce,
           '{sektor}': lead.sektor,
-          '{aksiyon_cagrisi}': 'Sizinle tanışmak isterim.',
-          '{sektor_ozel_mesaj}': 'Sektörünüzde dijitalleşme çok önemli.'
+          '{aksiyon_cagrisi}': buildCallToAction(lead, variant),
+          '{sektor_ozel_mesaj}': buildSectorMessage(lead, variant)
       };
 
       Object.keys(replacements).forEach(key => {
           subject = subject.replace(new RegExp(key, 'g'), replacements[key]);
           body = body.replace(new RegExp(key, 'g'), replacements[key]);
       });
+
+      body = sanitizeColdBody(body);
 
       return { subject, body, templateId: template.id };
   };
