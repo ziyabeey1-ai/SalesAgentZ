@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Mail, RefreshCw, Loader2, Sparkles, Send, Clock, Check, AlertTriangle, Eye, ImageIcon, X, UserCircle, BrainCircuit } from 'lucide-react';
+import { Mail, RefreshCw, Loader2, Sparkles, Send, Clock, Check, AlertTriangle, Eye, ImageIcon, X, UserCircle, BrainCircuit, MessageCircle, ArrowRight } from 'lucide-react';
 import { api } from '../services/api';
 import { Lead, EmailTemplate, PersonaType } from '../types';
 import EmptyState from '../components/EmptyState';
@@ -27,6 +27,7 @@ const MailAutomation: React.FC = () => {
   const [draftSubject, setDraftSubject] = useState('');
   const [draftBody, setDraftBody] = useState('');
   const [isSendingDraft, setIsSendingDraft] = useState(false);
+  const [isGeneratingReply, setIsGeneratingReply] = useState(false);
   
   // Persona Analysis State
   const [analyzingPersonaId, setAnalyzingPersonaId] = useState<string | null>(null);
@@ -75,8 +76,6 @@ const MailAutomation: React.FC = () => {
       
       setQueue(newQueue.sort((a,b) => b.score - a.score));
   };
-
-
 
   const getDeterministicVariant = (lead: Lead, optionCount: number) => {
       if (optionCount <= 1) return 0;
@@ -227,14 +226,9 @@ const MailAutomation: React.FC = () => {
       setAnalyzingPersonaId(item.id);
       try {
           const persona = await api.strategy.analyzePersona(item.lead);
-          
-          // Update Lead locally and remotely
           const updatedLead = { ...item.lead, personaAnalysis: persona };
           await api.leads.update(updatedLead);
-          
-          // Update queue
           setQueue(prev => prev.map(q => q.id === item.id ? { ...q, lead: updatedLead } : q));
-          
           await api.dashboard.logAction('Persona Analizi', `${item.lead.firma_adi}: ${persona.type}`, 'success');
       } catch (error) {
           console.error(error);
@@ -245,14 +239,10 @@ const MailAutomation: React.FC = () => {
   };
 
   const handleSmartWrite = async (item: QueueItem) => {
-      // Ensure we use the latest lead data from queue which might have persona
       const currentItem = queue.find(q => q.id === item.id) || item;
-      
       setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'sending' } : q));
-      
       try {
           const generated = await api.templates.generateColdEmail(currentItem.lead);
-          
           setQueue(prev => prev.map(q => q.id === item.id ? { 
               ...q, 
               status: 'pending', 
@@ -275,7 +265,6 @@ const MailAutomation: React.FC = () => {
           setDraftSubject(generated.subject);
           setDraftBody(generated.body + `\n\n${generated.cta}`);
           setActiveTab('approval');
-
       } catch (error) {
           console.error("Smart write failed", error);
           setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error' } : q));
@@ -283,11 +272,53 @@ const MailAutomation: React.FC = () => {
       }
   };
 
+  const generateReplyForIncoming = async (lead: Lead) => {
+      setIsGeneratingReply(true);
+      try {
+          // Extract last message from notes or use a generic prompt
+          const context = lead.notlar?.split('[Inbox]:').pop()?.trim() || "Müşteri yanıt verdi, detayları konuşmak istiyor.";
+          
+          // Use the strategy API to predict best reply or template generation
+          // We'll reuse generateColdEmail but with context injection for reply
+          // A proper implementation would use a dedicated `generateReply` endpoint, but for now we adapt.
+          
+          // Temporary: Mock response for immediate feedback, real implementation would use api.strategy
+          const result = await api.strategy.predictNextMove(lead);
+          const reply = result.possibleQuestions?.[0]?.responses?.neutral || "Merhaba,\n\nGeri dönüşünüz için teşekkürler. Konuyu detaylandırmak adına yarın 14:00 uygun mudur?\n\nSaygılarımla,";
+          
+          const draftLead: Lead = {
+              ...lead,
+              draftResponse: {
+                  subject: `Re: ${lead.firma_adi}`,
+                  body: reply,
+                  intent: 'reply',
+                  created_at: new Date().toISOString()
+              }
+          };
+          
+          // Update local state to show draft immediately
+          const updatedLeads = leads.map(l => l.id === lead.id ? draftLead : l);
+          setLeads(updatedLeads);
+          setSelectedDraft(draftLead);
+          setDraftSubject(`Re: ${lead.firma_adi}`);
+          setDraftBody(reply);
+          
+      } catch (error) {
+          console.error(error);
+          alert("Yanıt oluşturulamadı.");
+      } finally {
+          setIsGeneratingReply(false);
+      }
+  };
+
   const openDraft = (lead: Lead) => {
+      setSelectedDraft(lead);
       if (lead.draftResponse) {
-          setSelectedDraft(lead);
           setDraftSubject(lead.draftResponse.subject);
           setDraftBody(lead.draftResponse.body);
+      } else {
+          setDraftSubject(`Re: ${lead.firma_adi}`);
+          setDraftBody(''); // Empty body for new reply
       }
   };
 
@@ -337,6 +368,9 @@ const MailAutomation: React.FC = () => {
       );
   };
 
+  // Filter leads for Approval Tab: Either has a draft OR is waiting for approval (incoming reply)
+  const approvalLeads = leads.filter(l => l.draftResponse || l.lead_durumu === 'onay_bekliyor');
+
   return (
     <div className="h-full flex flex-col animate-fade-in space-y-6">
       <div className="flex gap-4 border-b border-slate-200 pb-2">
@@ -350,7 +384,7 @@ const MailAutomation: React.FC = () => {
             onClick={() => setActiveTab('approval')}
             className={`pb-2 px-2 font-medium text-sm transition-colors ${activeTab === 'approval' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-slate-500'}`}
           >
-              Yanıt Onayı
+              Yanıt Onayı ({approvalLeads.length})
           </button>
       </div>
 
@@ -439,22 +473,25 @@ const MailAutomation: React.FC = () => {
               <div className="w-1/3 bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col">
                   <div className="p-4 bg-slate-50 border-b border-slate-200 font-bold text-slate-700">Onay Bekleyenler</div>
                   <div className="flex-1 overflow-y-auto">
-                      {leads.filter(l => l.draftResponse).map(lead => (
+                      {approvalLeads.map(lead => (
                           <div 
                             key={lead.id}
                             onClick={() => openDraft(lead)}
                             className={`p-4 border-b border-slate-100 hover:bg-slate-50 cursor-pointer ${selectedDraft?.id === lead.id ? 'bg-indigo-50 border-l-4 border-l-indigo-600' : ''}`}
                           >
-                              <div className="font-medium text-slate-800">{lead.firma_adi}</div>
-                              <div className="text-xs text-slate-500 mt-1">{lead.draftResponse?.subject}</div>
+                              <div className="font-medium text-slate-800 flex justify-between">
+                                  {lead.firma_adi}
+                                  {!lead.draftResponse && <span className="bg-rose-100 text-rose-600 text-[9px] px-1.5 py-0.5 rounded-full font-bold">YENİ YANIT</span>}
+                              </div>
+                              <div className="text-xs text-slate-500 mt-1 truncate">{lead.draftResponse?.subject || 'Yanıt bekleniyor (Draft yok)'}</div>
                               
                               <div className="flex items-center gap-2 mt-2">
-                                  <span className="text-[10px] text-indigo-600 font-bold uppercase">{lead.draftResponse?.intent.replace('_', ' ')}</span>
+                                  {lead.draftResponse && <span className="text-[10px] text-indigo-600 font-bold uppercase">{lead.draftResponse.intent.replace('_', ' ')}</span>}
                                   {lead.personaAnalysis && renderPersonaBadge(lead.personaAnalysis.type)}
                               </div>
                           </div>
                       ))}
-                      {leads.filter(l => l.draftResponse).length === 0 && (
+                      {approvalLeads.length === 0 && (
                           <div className="p-8 text-center text-slate-400 text-sm">Onay bekleyen taslak yok.</div>
                       )}
                   </div>
@@ -466,7 +503,9 @@ const MailAutomation: React.FC = () => {
                       <>
                         <div className="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
                             <div className="flex items-center gap-2">
-                                <span className="font-bold text-slate-700">Taslak Düzenleyici</span>
+                                <span className="font-bold text-slate-700">
+                                    {selectedDraft.draftResponse ? 'Taslak Düzenleyici' : 'Yeni Yanıt Oluştur'}
+                                </span>
                                 {selectedDraft.personaAnalysis && (
                                     <span className="text-xs text-slate-500">
                                         (Hedef Persona: <strong>{selectedDraft.personaAnalysis.type}</strong>)
@@ -476,6 +515,25 @@ const MailAutomation: React.FC = () => {
                             <button onClick={() => setSelectedDraft(null)} className="text-slate-400 hover:text-red-500"><X size={18}/></button>
                         </div>
                         <div className="p-6 flex-1 flex flex-col space-y-4 overflow-y-auto">
+                            {!selectedDraft.draftResponse && (
+                                <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 mb-2">
+                                    <h4 className="text-xs font-bold text-blue-800 uppercase mb-2 flex items-center gap-2">
+                                        <MessageCircle size={14} /> Gelen Son Mesaj (Özet)
+                                    </h4>
+                                    <p className="text-sm text-blue-700 italic">
+                                        "{selectedDraft.notlar?.split('[Inbox]:').pop() || 'Mesaj içeriği bulunamadı.'}"
+                                    </p>
+                                    <button 
+                                        onClick={() => generateReplyForIncoming(selectedDraft)}
+                                        disabled={isGeneratingReply}
+                                        className="mt-3 flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700"
+                                    >
+                                        {isGeneratingReply ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                                        AI ile Yanıt Üret
+                                    </button>
+                                </div>
+                            )}
+
                             <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Kime</label>
                                 <div className="text-sm text-slate-800 font-mono bg-slate-100 p-2 rounded">{selectedDraft.email}</div>
@@ -511,7 +569,7 @@ const MailAutomation: React.FC = () => {
                   ) : (
                       <div className="flex flex-col items-center justify-center h-full text-slate-400">
                           <Mail size={48} className="mb-4 opacity-20" />
-                          <p>Soldan bir taslak seçin.</p>
+                          <p>Soldan bir taslak veya yanıt bekleyen lead seçin.</p>
                       </div>
                   )}
               </div>
