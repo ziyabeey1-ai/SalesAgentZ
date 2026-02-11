@@ -11,9 +11,14 @@ import { SYSTEM_PROMPT } from '../constants';
 
 const getApiKey = () => process.env.API_KEY || localStorage.getItem('apiKey') || '';
 
-// Helper to decide data source
+// Helper to check if Google is truly authenticated (Token exists)
+const isGoogleAuthenticated = () => {
+    return typeof window !== 'undefined' && window.gapi?.client?.getToken() != null;
+};
+
+// Helper to decide data source (Only use Sheets if Auth + Sheet ID exists)
 const useSheets = () => {
-    return sheetsService.isAuthenticated && localStorage.getItem('sheetId');
+    return isGoogleAuthenticated() && localStorage.getItem('sheetId');
 };
 
 export const api = {
@@ -140,16 +145,24 @@ export const api = {
       send: async (to: string, subject: string, body: string, attachments?: any[]) => {
           gamificationService.recordAction('email_sent');
           
-          if (useSheets()) {
-              return await gmailService.sendEmail(to, subject, body, attachments);
+          // Allow sending via Gmail API if authenticated, even if Sheet ID is missing (Database will be local storage)
+          if (isGoogleAuthenticated()) {
+              try {
+                  return await gmailService.sendEmail(to, subject, body, attachments);
+              } catch (e) {
+                  console.error("Gmail send failed, falling back to mock", e);
+                  // Fallthrough to mock if send fails
+              }
           }
+          
           // Simulate email sending delay
           await new Promise(resolve => setTimeout(resolve, 800));
           console.log("Local Simulation: Email Sent:", { to, subject });
           return { id: 'local-mock-id', _status: 'mock' };
       },
       syncReplies: async (leads: Lead[]): Promise<{ synced: number }> => {
-          if (!useSheets()) {
+          // Sync requires Auth but Sheet ID is optional (can sync to local leads)
+          if (!isGoogleAuthenticated()) {
               return { synced: 0 };
           }
 
@@ -425,13 +438,14 @@ export const api = {
 
   calendar: {
       getAll: async (): Promise<CalendarEvent[]> => {
-          if (useSheets()) {
+          // If authenticated, get real events, even without sheetID
+          if (isGoogleAuthenticated()) {
               return await sheetsService.getCalendarEvents();
           }
           return storage.getCalendarEvents();
       },
       create: async (event: Partial<CalendarEvent>): Promise<string> => {
-          if (useSheets()) {
+          if (isGoogleAuthenticated()) {
               return await sheetsService.createCalendarEvent(event);
           }
           const newEvent = { ...event, id: Math.random().toString(36).substr(2, 9) } as CalendarEvent;

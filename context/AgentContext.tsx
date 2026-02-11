@@ -59,15 +59,17 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     
     // Refs for loop management
     const configRef = useRef(agentConfig);
-    const isRunningRef = useRef(isAgentRunning);
+    const isRunningRef = useRef(false);
     const enrichmentRetryRef = useRef<Record<string, { attempts: number; nextRetryAt: number }>>({});
     const outreachRetryRef = useRef<Record<string, { attempts: number; nextRetryAt: number }>>({});
     const loopTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const burstStreakRef = useRef(0);
+    const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const isProcessingRef = useRef(false);
+    const loopCountRef = useRef(0);
 
     // Sync refs
     useEffect(() => { configRef.current = agentConfig; }, [agentConfig]);
-    useEffect(() => { isRunningRef.current = isAgentRunning; }, [isAgentRunning]);
 
     // Initialize & Auto-Connect Google Services
     useEffect(() => {
@@ -94,6 +96,9 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             if (loopTimeoutRef.current) {
                 clearTimeout(loopTimeoutRef.current);
             }
+            if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+            }
         };
     }, []);
 
@@ -101,19 +106,21 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     useEffect(() => {
         const wasRunning = localStorage.getItem(AGENT_RUNNING_KEY) === 'true';
         if (wasRunning) {
-            setIsAgentRunning(true);
-            localStorage.setItem(AGENT_RUNNING_KEY, 'true');
-            setAgentStatus('Başlatılıyor...');
+            startAgent();
             if (sessionStorage.getItem('agentRestoreNotified') !== 'true') {
                 addThought('info', 'Otopilot oturumu geri yüklendi.');
                 sessionStorage.setItem('agentRestoreNotified', 'true');
             }
-            setTimeout(agentLoop, 1000); // Increased initial delay to prevent race condition on load
         }
 
         return () => {
+            isRunningRef.current = false;
             if (loopTimeoutRef.current) {
                 clearTimeout(loopTimeoutRef.current);
+            }
+            if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+                intervalRef.current = null;
             }
         };
     }, []);
@@ -156,28 +163,53 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     const stopAgentSafely = (reason: string) => {
-        setIsAgentRunning(false);
-        localStorage.setItem(AGENT_RUNNING_KEY, 'false');
+        stopAgent();
         setAgentStatus('Durduruldu (Bütçe)');
         addThought('error', reason);
         addNotification('Ajan Durduruldu', reason, 'warning');
-        if (loopTimeoutRef.current) clearTimeout(loopTimeoutRef.current);
     };
 
     const toggleAgent = () => {
         if (isAgentRunning) {
-            setIsAgentRunning(false);
-            localStorage.setItem(AGENT_RUNNING_KEY, 'false');
-            setAgentStatus('Durduruldu');
+            stopAgent();
             sessionStorage.removeItem('agentRestoreNotified');
             addThought('info', 'Otopilot kullanıcı tarafından durduruldu.');
-            if (loopTimeoutRef.current) clearTimeout(loopTimeoutRef.current);
         } else {
-            setIsAgentRunning(true);
-            localStorage.setItem(AGENT_RUNNING_KEY, 'true');
-            setAgentStatus('Başlatılıyor...');
+            startAgent();
             addThought('info', 'Otopilot başlatıldı.');
-            setTimeout(agentLoop, 100);
+        }
+    };
+
+    const startAgent = () => {
+        if (intervalRef.current) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+        }
+
+        isRunningRef.current = true;
+        setIsAgentRunning(true);
+        localStorage.setItem(AGENT_RUNNING_KEY, 'true');
+        loopCountRef.current = 0;
+        setAgentStatus('Başlatılıyor...');
+        
+        // Start loop immediately then interval
+        agentLoop();
+        intervalRef.current = setInterval(agentLoop, 10000); 
+    };
+
+    const stopAgent = () => {
+        isRunningRef.current = false;
+        setIsAgentRunning(false);
+        localStorage.setItem(AGENT_RUNNING_KEY, 'false');
+        setAgentStatus('Durduruldu');
+        
+        if (intervalRef.current) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+        }
+        if (loopTimeoutRef.current) {
+            clearTimeout(loopTimeoutRef.current);
+            loopTimeoutRef.current = null;
         }
     };
 
@@ -669,10 +701,10 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const agentLoop = async () => {
         // Critical safety check at start of loop
-        if (!isRunningRef.current) {
-            localStorage.setItem(AGENT_RUNNING_KEY, 'false');
+        if (!isRunningRef.current || isProcessingRef.current) {
             return;
         }
+        isProcessingRef.current = true;
 
         try {
             const leads = await api.leads.getAll();
@@ -681,6 +713,9 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             const allowDiscovery = focusMode !== 'outreach_only';
             const allowOutreach = focusMode !== 'discovery_only';
             
+            // Refresh pending drafts first
+            await refreshPendingCount();
+
             // --- PRIORITY 1: MAINTENANCE & CLEANUP (Safe 24/7, FREE) ---
             if (!actionTaken) actionTaken = await performLeadSanitization(leads);
 
@@ -710,23 +745,33 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                             agentLoop();
                         }
                     }, 60000); 
+                    isProcessingRef.current = false;
                     return; 
                 }
 
                 setAgentStatus(`Aktif İşlem (x${burstStreakRef.current})...`);
-                loopTimeoutRef.current = setTimeout(agentLoop, BURST_INTERVAL);
+                // Use a loop-specific timeout that can be cleared
+                if (isRunningRef.current) {
+                    loopTimeoutRef.current = setTimeout(agentLoop, BURST_INTERVAL);
+                }
             } else {
-                setAgentStatus('Beklemede (İşlem Kuyruğu Taranıyor)...');
+                const cycleNo = ++loopCountRef.current;
+                const lastRunAt = new Date().toLocaleTimeString();
+                setAgentStatus(`Beklemede (Aktif) • Son döngü: ${lastRunAt} • #${cycleNo}`);
                 burstStreakRef.current = 0;
-                // Fast recovery loop to check for new tasks
-                loopTimeoutRef.current = setTimeout(agentLoop, IDLE_INTERVAL);
+                // Fast recovery loop to check for new tasks, but managed by intervalRef
+                // No recursive call needed here if interval is set
             }
 
         } catch (error: any) {
             console.error("Agent Loop Critical Error", error);
             // Don't kill the agent on error, just pause and retry
             addThought('error', `Geçici Hata: ${error.message || 'Bilinmeyen hata'}. Yeniden deneniyor...`);
-            setTimeout(agentLoop, 15000);
+            if (isRunningRef.current) {
+                setTimeout(agentLoop, 15000);
+            }
+        } finally {
+            isProcessingRef.current = false;
         }
     };
 
