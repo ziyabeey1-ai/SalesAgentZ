@@ -76,8 +76,6 @@ const MailAutomation: React.FC = () => {
       setQueue(newQueue.sort((a,b) => b.score - a.score));
   };
 
-
-
   const getDeterministicVariant = (lead: Lead, optionCount: number) => {
       if (optionCount <= 1) return 0;
       const key = `${lead.id}-${lead.firma_adi}-${lead.sektor}`;
@@ -205,6 +203,7 @@ const MailAutomation: React.FC = () => {
           }
 
           await api.gmail.send(item.lead.email, content.subject, content.body, attachments);
+          await api.templates.recordUsage(content.templateId, item.lead.sektor);
 
           const updatedLead = { 
               ...item.lead, 
@@ -296,6 +295,9 @@ const MailAutomation: React.FC = () => {
 
       try {
           await api.gmail.send(selectedDraft.email, draftSubject, draftBody);
+          if (selectedDraft.lastUsedTemplateId) {
+              await api.templates.recordUsage(selectedDraft.lastUsedTemplateId, selectedDraft.sektor);
+          }
           
           const updatedLead: Lead = {
               ...selectedDraft,

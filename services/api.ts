@@ -431,6 +431,10 @@ export const api = {
       save: async (template: EmailTemplate) => { storage.saveTemplate(template); },
       update: async (template: EmailTemplate) => { storage.updateTemplate(template); },
       delete: async (id: string) => { storage.deleteTemplate(id); },
+      recordUsage: async (templateId: string, sector: string = 'Diğer') => {
+          if (!templateId || templateId === 'ai-generated') return;
+          storage.incrementTemplateUsage(templateId, sector);
+      },
       
       generateColdEmail: async (lead: Lead) => {
           const ai = new GoogleGenAI({ apiKey: getApiKey() });
