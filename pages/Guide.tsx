@@ -1,6 +1,7 @@
 
 import React from 'react';
-import { BookOpen, Zap, Target, Mail, Activity, PlayCircle, ShieldCheck, HelpCircle, CheckCircle, Calendar } from 'lucide-react';
+import { Zap, Target, Mail, HelpCircle, CheckCircle, Calendar } from 'lucide-react';
+import ProjectShowcase from '../components/portfolio/ProjectShowcase';
 
 const Guide: React.FC = () => {
   return (
@@ -107,6 +108,11 @@ const Guide: React.FC = () => {
                   </ul>
               </div>
           </div>
+      </div>
+
+
+      <div className="bg-white rounded-xl border border-slate-200 p-6 md:p-8 shadow-sm">
+        <ProjectShowcase />
       </div>
 
       {/* FAQ / Tips */}
